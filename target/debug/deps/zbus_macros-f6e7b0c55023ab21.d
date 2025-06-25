@@ -1,0 +1,10 @@
+/mnt/c/Users/optim/UBASIC-Yuji-KIDA/target/debug/deps/libzbus_macros-f6e7b0c55023ab21.so: /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/lib.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/error.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/iface.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/proxy.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/utils.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/../README.md
+
+/mnt/c/Users/optim/UBASIC-Yuji-KIDA/target/debug/deps/zbus_macros-f6e7b0c55023ab21.d: /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/lib.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/error.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/iface.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/proxy.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/utils.rs /home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/../README.md
+
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/lib.rs:
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/error.rs:
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/iface.rs:
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/proxy.rs:
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/utils.rs:
+/home/optimizix/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-3.15.2/src/../README.md:
