@@ -1,0 +1,62 @@
+# Rustfmt configuration for UBASIC Rust
+# This ensures consistent code formatting across the project
+
+# Maximum line length
+max_width = 100
+
+# Indent with spaces
+hard_tabs = false
+tab_spaces = 4
+
+# Use spaces around operators
+spaces_around_ranges = false
+
+# Format string literals
+format_strings = true
+
+# Format comments
+format_code_in_doc_comments = true
+
+# Import grouping
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+
+# Function call formatting
+fn_call_width = 60
+
+# Struct literal formatting
+struct_lit_width = 18
+
+# Array formatting
+array_width = 60
+
+# Control flow formatting
+control_brace_style = "AlwaysNextLine"
+
+# Match expression formatting
+match_arm_blocks = true
+
+# Closure formatting
+closure_style = "Block"
+
+# Where clause formatting
+where_single_line = false
+
+# Type formatting
+type_punctuation_density = "Wide"
+
+# Space before function call parentheses
+space_before_colon = false
+space_after_colon = true
+
+# Space around operators
+spaces_around_ranges = false
+
+# Remove trailing whitespace
+remove_nested_parens = true
+
+# Merge consecutive blank lines
+merge_derives = true
+
+# Normalize comments
+normalize_comments = true 

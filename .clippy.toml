@@ -1,0 +1,24 @@
+# Clippy configuration for UBASIC Rust
+# This configures linting rules for better code quality
+
+# Allow some common patterns that might be needed for BASIC interpreter
+allow = [
+    "clippy::too_many_arguments",
+    "clippy::type_complexity",
+    "clippy::module_name_repetitions",
+    "clippy::missing_errors_doc",
+    "clippy::missing_panics_doc",
+]
+
+# Disable some overly strict warnings
+disallow = [
+    "clippy::pedantic",
+]
+
+# Specific rule configurations
+[msrv]
+msrv = "1.70"
+
+# Performance related
+[performance]
+all-targets = true 

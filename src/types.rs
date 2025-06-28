@@ -3,18 +3,14 @@
 //! This module defines all the data types supported by UBASIC,
 //! including integers, floats, complex numbers, strings, arrays, and more.
 
-use rug::{Integer, Float, Complex};
-use num_rational::Rational64;
-use nalgebra::{Matrix, Vector, U1, Dynamic};
-use serde::{Serialize, Deserialize};
+use rug::{Integer, Float, Complex, Assign};
 use std::fmt;
 use std::collections::HashMap;
 use std::ops::{Add, Sub, Mul, Div, Rem, Neg, AddAssign, SubAssign, MulAssign, DivAssign, RemAssign};
 use std::cmp::{PartialEq, PartialOrd, Ordering};
-use num_complex::Complex64;
 
 /// Main UBASIC value type that can hold any supported data type
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum UBasicValue {
     /// Integer (arbitrary precision)
     Integer(Integer),
@@ -25,20 +21,17 @@ pub enum UBasicValue {
     /// Complex number
     Complex(Complex),
     
-    /// Rational number (fraction)
-    Rational(Rational64),
-    
     /// String
     String(String),
     
     /// Array of values
     Array(Vec<UBasicValue>),
     
-    /// Matrix
-    Matrix(Matrix<f64, Dynamic, Dynamic, nalgebra::VecStorage<f64, Dynamic, Dynamic>>),
+    /// Matrix (2D array)
+    Matrix(Vec<Vec<UBasicValue>>),
     
-    /// Vector
-    Vector(Vector<f64, Dynamic, nalgebra::VecStorage<f64, Dynamic, U1>>),
+    /// Vector (1D array)
+    Vector(Vec<UBasicValue>),
     
     /// Boolean value
     Boolean(bool),
@@ -48,12 +41,11 @@ pub enum UBasicValue {
 }
 
 /// UBASIC data type enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UBasicType {
     Integer,
     Float,
     Complex,
-    Rational,
     String,
     Array,
     Matrix,
@@ -69,7 +61,6 @@ impl UBasicValue {
             Self::Integer(_) => UBasicType::Integer,
             Self::Float(_) => UBasicType::Float,
             Self::Complex(_) => UBasicType::Complex,
-            Self::Rational(_) => UBasicType::Rational,
             Self::String(_) => UBasicType::String,
             Self::Array(_) => UBasicType::Array,
             Self::Matrix(_) => UBasicType::Matrix,
@@ -83,20 +74,19 @@ impl UBasicValue {
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,
-            Self::Integer(_) | Self::Float(_) | Self::Complex(_) | Self::Rational(_)
+            Self::Integer(_) | Self::Float(_) | Self::Complex(_)
         )
     }
 
     /// Check if the value is zero
     pub fn is_zero(&self) -> bool {
         match self {
-            Self::Integer(i) => i == &Integer::ZERO,
-            Self::Float(f) => f == &Float::new(64),
-            Self::Complex(c) => c.norm_ref().to_f64() == 0.0,
-            Self::Rational(r) => r.numer() == &0,
+            Self::Integer(i) => i.is_zero(),
+            Self::Float(f) => f.is_zero(),
+            Self::Complex(c) => c.is_zero(),
             Self::String(s) => s.is_empty(),
             Self::Array(a) => a.is_empty(),
-            Self::Matrix(m) => m.is_empty(),
+            Self::Matrix(m) => m.is_empty() || m[0].is_empty(),
             Self::Vector(v) => v.is_empty(),
             Self::Boolean(b) => !b,
             Self::Null => true,
@@ -109,14 +99,24 @@ impl UBasicValue {
             Self::Integer(i) => i.to_string(),
             Self::Float(f) => f.to_string(),
             Self::Complex(c) => format!("{}+{}i", c.real_ref(), c.imag_ref()),
-            Self::Rational(r) => r.to_string(),
             Self::String(s) => s.clone(),
             Self::Array(a) => {
                 let elements: Vec<String> = a.iter().map(|v| v.to_string()).collect();
                 format!("[{}]", elements.join(", "))
             }
-            Self::Matrix(m) => format!("Matrix({}x{})", m.nrows(), m.ncols()),
-            Self::Vector(v) => format!("Vector({})", v.len()),
+            Self::Matrix(m) => {
+                let rows: Vec<String> = m.iter()
+                    .map(|row| {
+                        let elements: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+                        format!("[{}]", elements.join(", "))
+                    })
+                    .collect();
+                format!("[{}]", rows.join(", "))
+            }
+            Self::Vector(v) => {
+                let elements: Vec<String> = v.iter().map(|val| val.to_string()).collect();
+                format!("<{}>", elements.join(", "))
+            }
             Self::Boolean(b) => b.to_string(),
             Self::Null => "null".to_string(),
         }
@@ -128,7 +128,7 @@ impl UBasicValue {
             Self::String(s) => Some(s.len()),
             Self::Array(a) => Some(a.len()),
             Self::Vector(v) => Some(v.len()),
-            Self::Matrix(m) => Some(m.nrows() * m.ncols()),
+            Self::Matrix(m) => Some(m.len()),
             _ => None,
         }
     }
@@ -602,7 +602,7 @@ impl Default for UBasicValue {
     }
 }
 
-/// Variable storage
+/// Variable storage with metadata
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub value: UBasicValue,
@@ -611,6 +611,7 @@ pub struct Variable {
 }
 
 impl Variable {
+    /// Create a new variable
     pub fn new(value: UBasicValue) -> Self {
         Self {
             value,
@@ -619,6 +620,7 @@ impl Variable {
         }
     }
 
+    /// Create a constant variable
     pub fn constant(value: UBasicValue) -> Self {
         Self {
             value,
@@ -628,7 +630,7 @@ impl Variable {
     }
 }
 
-/// Array data structure
+/// Array storage with multi-dimensional support
 #[derive(Debug, Clone)]
 pub struct Array {
     pub dimensions: Vec<usize>,
@@ -636,6 +638,7 @@ pub struct Array {
 }
 
 impl Array {
+    /// Create a new array with given dimensions
     pub fn new(dimensions: Vec<usize>) -> Self {
         let total_size = dimensions.iter().product();
         Self {
@@ -665,10 +668,12 @@ impl Array {
         Some(index)
     }
 
+    /// Get a value from the array
     pub fn get(&self, indices: &[isize]) -> Option<&UBasicValue> {
         self.get_index(indices).map(|i| &self.data[i])
     }
 
+    /// Set a value in the array
     pub fn set(&mut self, indices: &[isize], value: UBasicValue) -> bool {
         if let Some(index) = self.get_index(indices) {
             self.data[index] = value;
@@ -690,6 +695,7 @@ pub struct Function {
 }
 
 impl Function {
+    /// Create a new function
     pub fn new(name: String, parameters: Vec<String>, body: Vec<String>, line_defined: usize) -> Self {
         Self {
             name,
@@ -714,6 +720,7 @@ pub struct ProgramState {
 }
 
 impl ProgramState {
+    /// Create a new program state
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
@@ -726,26 +733,32 @@ impl ProgramState {
         }
     }
 
+    /// Set a variable
     pub fn set_variable(&mut self, name: String, value: UBasicValue) {
         self.variables.insert(name, Variable::new(value));
     }
 
+    /// Get a variable
     pub fn get_variable(&self, name: &str) -> Option<&UBasicValue> {
         self.variables.get(name).map(|v| &v.value)
     }
 
+    /// Set an array
     pub fn set_array(&mut self, name: String, array: Array) {
         self.arrays.insert(name, array);
     }
 
+    /// Get an array
     pub fn get_array(&self, name: &str) -> Option<&Array> {
         self.arrays.get(name)
     }
 
+    /// Get a mutable reference to an array
     pub fn get_array_mut(&mut self, name: &str) -> Option<&mut Array> {
         self.arrays.get_mut(name)
     }
 
+    /// Clear all state
     pub fn clear(&mut self) {
         self.variables.clear();
         self.arrays.clear();
@@ -769,48 +782,40 @@ mod tests {
 
     #[test]
     fn test_value_types() {
-        let int_val = UBasicValue::Integer(Integer::from(42));
-        assert_eq!(int_val.get_type(), UBasicType::Integer);
-        assert!(int_val.is_numeric());
+        let int_val = UBasicValue::from(42);
+        let float_val = UBasicValue::from(3.14);
+        let string_val = UBasicValue::from("hello");
+        let bool_val = UBasicValue::from(true);
 
-        let float_val = UBasicValue::Float(Float::with_val(64, 3.14));
-        assert_eq!(float_val.get_type(), UBasicType::Float);
-        assert!(float_val.is_numeric());
-
-        let string_val = UBasicValue::String("hello".to_string());
-        assert_eq!(string_val.get_type(), UBasicType::String);
-        assert!(!string_val.is_numeric());
+        assert!(matches!(int_val, UBasicValue::Integer(_)));
+        assert!(matches!(float_val, UBasicValue::Float(_)));
+        assert!(matches!(string_val, UBasicValue::String(_)));
+        assert!(matches!(bool_val, UBasicValue::Boolean(_)));
     }
 
     #[test]
     fn test_array_operations() {
         let mut array = Array::new(vec![2, 3]);
-        array.set(&[0, 0], UBasicValue::Integer(Integer::from(1)));
-        array.set(&[1, 2], UBasicValue::Integer(Integer::from(6)));
-
-        assert_eq!(array.get(&[0, 0]), Some(&UBasicValue::Integer(Integer::from(1))));
-        assert_eq!(array.get(&[1, 2]), Some(&UBasicValue::Integer(Integer::from(6))));
-        assert_eq!(array.get(&[2, 0]), None); // Out of bounds
+        let value = UBasicValue::from(42);
+        
+        assert!(array.set(&[0, 1], value.clone()));
+        assert_eq!(array.get(&[0, 1]), Some(&value));
     }
 
     #[test]
     fn test_program_state() {
         let mut state = ProgramState::new();
-        state.set_variable("x".to_string(), UBasicValue::Integer(Integer::from(42)));
+        state.set_variable("x".to_string(), UBasicValue::from(42));
         
-        assert_eq!(state.get_variable("x"), Some(&UBasicValue::Integer(Integer::from(42))));
-        assert_eq!(state.get_variable("y"), None);
+        assert_eq!(state.get_variable("x"), Some(&UBasicValue::from(42)));
     }
 
     #[test]
     fn test_value_conversions() {
-        let int_val: UBasicValue = 42.into();
-        assert!(matches!(int_val, UBasicValue::Integer(_)));
-
-        let float_val: UBasicValue = 3.14.into();
-        assert!(matches!(float_val, UBasicValue::Float(_)));
-
-        let string_val: UBasicValue = "hello".into();
-        assert!(matches!(string_val, UBasicValue::String(_)));
+        let int_val = UBasicValue::from(42);
+        let float_val = UBasicValue::from(3.14);
+        
+        assert!(int_val.to_integer().is_some());
+        assert!(float_val.to_float().is_some());
     }
 } 

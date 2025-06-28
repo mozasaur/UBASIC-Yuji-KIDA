@@ -120,12 +120,71 @@ impl UBasicEngine {
     fn execute_node(&mut self, node: &ASTNode) -> UBasicResult<UBasicValue> {
         match node {
             ASTNode::Program { statements } => {
-                let mut last_value = UBasicValue::Null;
-                
-                for stmt in statements {
-                    last_value = self.execute_node(stmt)?;
+                // Build line number table
+                let mut line_table = std::collections::HashMap::new();
+                for (idx, stmt) in statements.iter().enumerate() {
+                    if let ASTNode::Line { number: Some(n), .. } = stmt {
+                        line_table.insert(*n, idx);
+                    }
                 }
-                
+                // Execution state
+                let mut pc = 0;
+                let mut call_stack = Vec::new();
+                let mut last_value = UBasicValue::Null;
+                while pc < statements.len() {
+                    match &statements[pc] {
+                        ASTNode::Line { number: _, statements: line_stmts } => {
+                            let mut inner_pc = 0;
+                            while inner_pc < line_stmts.len() {
+                                let stmt = &line_stmts[inner_pc];
+                                match stmt {
+                                    ASTNode::GotoStatement { line_number } => {
+                                        if let Some(&target) = line_table.get(line_number) {
+                                            pc = target;
+                                            break; // jump to next line
+                                        } else {
+                                            return Err(UBasicError::runtime(
+                                                format!("GOTO to undefined line {}", line_number), None));
+                                        }
+                                    }
+                                    ASTNode::GosubStatement { line_number } => {
+                                        if let Some(&target) = line_table.get(line_number) {
+                                            call_stack.push(pc + 1); // return to next line after GOSUB
+                                            pc = target;
+                                            break;
+                                        } else {
+                                            return Err(UBasicError::runtime(
+                                                format!("GOSUB to undefined line {}", line_number), None));
+                                        }
+                                    }
+                                    ASTNode::ReturnStatement => {
+                                        if let Some(ret_pc) = call_stack.pop() {
+                                            pc = ret_pc;
+                                            break;
+                                        } else {
+                                            return Err(UBasicError::runtime(
+                                                "RETURN without GOSUB", None));
+                                        }
+                                    }
+                                    ASTNode::EndStatement => {
+                                        return Ok(UBasicValue::Null);
+                                    }
+                                    ASTNode::StopStatement => {
+                                        return Err(UBasicError::runtime("Program stopped".to_string(), None));
+                                    }
+                                    _ => {
+                                        last_value = self.execute_node(stmt)?;
+                                    }
+                                }
+                                inner_pc += 1;
+                            }
+                        }
+                        _ => {
+                            last_value = self.execute_node(&statements[pc])?;
+                        }
+                    }
+                    pc += 1;
+                }
                 Ok(last_value)
             }
             
@@ -152,9 +211,29 @@ impl UBasicEngine {
             }
             
             ASTNode::Assignment { variable, value } => {
-                let value_val = self.execute_node(value)?;
-                self.state.set_variable(variable.clone(), value_val.clone());
-                Ok(value_val)
+                // Array assignment if variable contains '['
+                if let Some(idx) = variable.find('[') {
+                    let name = &variable[..idx];
+                    let indices_str = &variable[idx+1..variable.len()-1];
+                    let indices: Vec<usize> = indices_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                    if let Some(UBasicValue::Array(mut arr)) = self.state.get_variable(name).cloned() {
+                        let flat_idx = if indices.len() == 1 { indices[0] } else { indices.iter().product() };
+                        let val = self.execute_node(value)?;
+                        if flat_idx < arr.len() {
+                            arr[flat_idx] = val.clone();
+                            self.state.set_variable(name.to_string(), UBasicValue::Array(arr));
+                            Ok(val)
+                        } else {
+                            Err(UBasicError::runtime("Array index out of bounds", None))
+                        }
+                    } else {
+                        Err(UBasicError::runtime("Array not defined", None))
+                    }
+                } else {
+                    let value_val = self.execute_node(value)?;
+                    self.state.set_variable(variable.clone(), value_val.clone());
+                    Ok(value_val)
+                }
             }
             
             ASTNode::PrintStatement { expressions } => {
@@ -215,44 +294,25 @@ impl UBasicEngine {
             }
             
             ASTNode::ForLoop { variable, start, end, step, body } => {
-                let start_val = self.execute_node(start)?;
-                let end_val = self.execute_node(end)?;
+                let start_val = self.to_numeric(&self.execute_node(start)?)?;
+                let end_val = self.to_numeric(&self.execute_node(end)?)?;
                 let step_val = if let Some(step_expr) = step {
-                    self.execute_node(step_expr)?
+                    self.to_numeric(&self.execute_node(step_expr)?)?
                 } else {
-                    UBasicValue::Integer(1.into())
+                    1.0
                 };
                 
-                // Convert to numeric values for iteration
-                let start_num = self.to_numeric(&start_val)?;
-                let end_num = self.to_numeric(&end_val)?;
-                let step_num = self.to_numeric(&step_val)?;
-                
-                let mut current = start_num;
+                let mut current = start_val;
                 let mut last_value = UBasicValue::Null;
                 
-                loop {
-                    // Check if we should continue
-                    let should_continue = if step_num >= 0.0 {
-                        current <= end_num
-                    } else {
-                        current >= end_num
-                    };
+                while if step_val > 0.0 { current <= end_val } else { current >= end_val } {
+                    self.state.set_variable(variable.clone(), UBasicValue::Float(current));
                     
-                    if !should_continue {
-                        break;
-                    }
-                    
-                    // Set the loop variable
-                    self.state.set_variable(variable.clone(), UBasicValue::Float(current.into()));
-                    
-                    // Execute loop body
                     for stmt in body {
                         last_value = self.execute_node(stmt)?;
                     }
                     
-                    // Increment
-                    current += step_num;
+                    current += step_val;
                 }
                 
                 Ok(last_value)
@@ -261,12 +321,7 @@ impl UBasicEngine {
             ASTNode::WhileLoop { condition, body } => {
                 let mut last_value = UBasicValue::Null;
                 
-                loop {
-                    let condition_val = self.execute_node(condition)?;
-                    if !self.is_truthy(&condition_val) {
-                        break;
-                    }
-                    
+                while self.is_truthy(&self.execute_node(condition)?) {
                     for stmt in body {
                         last_value = self.execute_node(stmt)?;
                     }
@@ -284,18 +339,49 @@ impl UBasicEngine {
                 self.call_function(name, &arg_values)
             }
             
-            ASTNode::EndStatement => {
-                // Stop execution
-                Ok(UBasicValue::Null)
+            ASTNode::ArrayAccess { array, indices } => {
+                if let Some(UBasicValue::Array(arr)) = self.state.get_variable(array).cloned() {
+                    let mut idx = 0;
+                    if indices.len() == 1 {
+                        idx = self.to_numeric(&self.execute_node(&indices[0])?)? as usize;
+                    } else {
+                        let mut mult = 1;
+                        for i in indices.iter().rev() {
+                            idx += (self.to_numeric(&self.execute_node(i)?)? as usize) * mult;
+                            mult *= arr.len();
+                        }
+                    }
+                    if idx < arr.len() {
+                        Ok(arr[idx].clone())
+                    } else {
+                        Err(UBasicError::runtime("Array index out of bounds", None))
+                    }
+                } else {
+                    Err(UBasicError::runtime("Array not defined", None))
+                }
             }
             
-            ASTNode::StopStatement => {
-                // Pause execution - in interactive mode, just return
-                Ok(UBasicValue::Null)
+            ASTNode::Line { number: _, statements } => {
+                let mut last_value = UBasicValue::Null;
+                for stmt in statements {
+                    last_value = self.execute_node(stmt)?;
+                }
+                Ok(last_value)
             }
             
-            // Placeholder implementations for other nodes
-            _ => Ok(UBasicValue::Null),
+            ASTNode::DimStatement { name, dimensions } => {
+                // Evaluate dimensions
+                let mut dims = Vec::new();
+                for dim in dimensions {
+                    let d = self.to_numeric(&self.execute_node(dim)?)?;
+                    dims.push(d as usize);
+                }
+                // Create array (vector of Nulls)
+                let size = dims.iter().product();
+                let arr = vec![UBasicValue::Null; size];
+                self.state.set_variable(name.clone(), UBasicValue::Array(arr));
+                Ok(UBasicValue::Null)
+            }
         }
     }
 
@@ -728,5 +814,102 @@ mod tests {
         let mut engine = UBasicEngine::new();
         let result = engine.run("PRINT x");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_interpreter_assignment_and_arithmetic() {
+        let mut engine = UBasicEngine::new();
+        let result = engine.run("LET X = 10\nLET Y = X + 5\nPRINT Y");
+        assert!(result.is_ok());
+        assert_eq!(engine.state.get_variable("Y").unwrap().to_string(), "15");
+    }
+
+    #[test]
+    fn test_interpreter_print() {
+        let mut engine = UBasicEngine::new();
+        let result = engine.run("PRINT 123, \"abc\"");
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert!(output.iter().any(|line| line.contains("123")));
+        assert!(output.iter().any(|line| line.contains("abc")));
+    }
+
+    #[test]
+    fn test_interpreter_if_statement() {
+        let mut engine = UBasicEngine::new();
+        let result = engine.run("LET X = 1\nIF X THEN PRINT \"YES\" ELSE PRINT \"NO\"");
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert!(output.iter().any(|line| line.contains("YES")));
+    }
+
+    #[test]
+    fn test_interpreter_for_loop() {
+        let mut engine = UBasicEngine::new();
+        let result = engine.run("FOR I = 1 TO 3\nPRINT I\nNEXT");
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert!(output.iter().any(|line| line.contains("1")));
+        assert!(output.iter().any(|line| line.contains("2")));
+        assert!(output.iter().any(|line| line.contains("3")));
+    }
+
+    #[test]
+    fn test_interpreter_error() {
+        let mut engine = UBasicEngine::new();
+        let result = engine.run("LET = 5");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_goto_statement() {
+        let mut engine = UBasicEngine::new();
+        let code = "10 PRINT \"A\"
+20 GOTO 40
+30 PRINT \"B\"
+40 PRINT \"C\"";
+        let result = engine.run(code);
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert!(output.iter().any(|line| line.contains("A")));
+        assert!(!output.iter().any(|line| line.contains("B")));
+        assert!(output.iter().any(|line| line.contains("C")));
+    }
+
+    #[test]
+    fn test_gosub_and_return() {
+        let mut engine = UBasicEngine::new();
+        let code = "10 PRINT \"Start\"
+20 GOSUB 100
+30 PRINT \"Back\"
+40 END
+100 PRINT \"Sub\"
+110 RETURN";
+        let result = engine.run(code);
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert_eq!(output[0], "Start");
+        assert_eq!(output[1], "Sub");
+        assert_eq!(output[2], "Back");
+    }
+
+    #[test]
+    fn test_return_without_gosub_error() {
+        let mut engine = UBasicEngine::new();
+        let code = "10 RETURN";
+        let result = engine.run(code);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("RETURN without GOSUB"));
+    }
+
+    #[test]
+    fn test_dim_and_array_assignment_access() {
+        let mut engine = UBasicEngine::new();
+        let code = "10 DIM A[3]\n20 LET A[0] = 42\n30 LET A[1] = 7\n40 LET A[2] = A[0] + A[1]\n50 PRINT A[2]";
+        let result = engine.run(code);
+        assert!(result.is_ok());
+        let output = engine.get_output();
+        assert!(output.iter().any(|line| line.contains("49")));
     }
 } 

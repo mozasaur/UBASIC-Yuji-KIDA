@@ -170,6 +170,11 @@ pub enum ASTNode {
         number: Option<usize>,
         statements: Vec<ASTNode>,
     },
+
+    DimStatement {
+        name: String,
+        dimensions: Vec<ASTNode>,
+    },
 }
 
 /// Parser for UBASIC code
@@ -198,85 +203,138 @@ impl Parser {
         let statements = self.parse_statements()?;
         
         if !self.errors.is_empty() {
-            return Err(self.errors[0].clone());
+            return Err(self.errors.remove(0));
         }
         
         Ok(ASTNode::Program { statements })
     }
 
-    /// Tokenize the input code
+    /// Tokenize BASIC code into tokens
     fn tokenize(&self, code: &str) -> UBasicResult<Vec<Token>> {
         let mut tokens = Vec::new();
         let mut chars = code.chars().peekable();
         let mut line = 1;
         let mut column = 1;
 
-        while let Some(ch) = chars.next() {
+        while let Some(&ch) = chars.peek() {
             match ch {
                 // Whitespace
                 ' ' | '\t' => {
+                    chars.next();
                     column += 1;
                 }
                 
                 // Newlines
                 '\n' => {
+                    chars.next();
                     tokens.push(Token::Newline);
                     line += 1;
                     column = 1;
                 }
                 
                 '\r' => {
+                    chars.next();
                     if chars.peek() == Some(&'\n') {
                         chars.next();
-                        tokens.push(Token::Newline);
-                        line += 1;
-                        column = 1;
-                    } else {
-                        tokens.push(Token::Newline);
-                        line += 1;
-                        column = 1;
+                    }
+                    tokens.push(Token::Newline);
+                    line += 1;
+                    column = 1;
+                }
+                
+                // Comments
+                '\'' => {
+                    // Skip to end of line
+                    while let Some(&next_ch) = chars.peek() {
+                        if next_ch == '\n' || next_ch == '\r' {
+                            break;
+                        }
+                        chars.next();
+                        column += 1;
                     }
                 }
                 
                 // Numbers
                 '0'..='9' => {
                     let mut number = String::new();
-                    while let Some(&ch) = chars.peek() {
-                        if ch.is_ascii_digit() || ch == '.' || ch == 'e' || ch == 'E' || ch == '+' || ch == '-' {
-                            number.push(ch);
-                            chars.next();
-                        } else {
-                            break;
+                    let mut has_decimal = false;
+                    
+                    while let Some(&next_ch) = chars.peek() {
+                        match next_ch {
+                            '0'..='9' => {
+                                number.push(chars.next().unwrap());
+                                column += 1;
+                            }
+                            '.' if !has_decimal => {
+                                number.push(chars.next().unwrap());
+                                has_decimal = true;
+                                column += 1;
+                            }
+                            'e' | 'E' => {
+                                number.push(chars.next().unwrap());
+                                column += 1;
+                                
+                                // Handle exponent
+                                if let Some(&exp_ch) = chars.peek() {
+                                    if exp_ch == '+' || exp_ch == '-' {
+                                        number.push(chars.next().unwrap());
+                                        column += 1;
+                                    }
+                                }
+                            }
+                            _ => break,
                         }
                     }
-                    tokens.push(Token::Number(number.clone()));
-                    column += number.len();
+                    
+                    tokens.push(Token::Number(number));
                 }
                 
                 // Strings
                 '"' => {
-                    let mut string = String::new();
+                    chars.next(); // Consume opening quote
                     column += 1;
                     
-                    while let Some(next_ch) = chars.next() {
+                    let mut string = String::new();
+                    while let Some(&next_ch) = chars.peek() {
                         match next_ch {
-                            '"' => break,
+                            '"' => {
+                                chars.next(); // Consume closing quote
+                                column += 1;
+                                break;
+                            }
                             '\n' | '\r' => {
                                 return Err(UBasicError::syntax(
                                     "Unterminated string literal",
-                                    line,
-                                    column,
+                                    Some(line),
+                                    Some(column),
                                 ));
                             }
+                            '\\' => {
+                                chars.next(); // Consume backslash
+                                column += 1;
+                                
+                                // Handle escape sequences
+                                if let Some(&esc_ch) = chars.peek() {
+                                    match esc_ch {
+                                        'n' => string.push('\n'),
+                                        't' => string.push('\t'),
+                                        'r' => string.push('\r'),
+                                        '"' => string.push('"'),
+                                        '\\' => string.push('\\'),
+                                        _ => string.push(esc_ch),
+                                    }
+                                    chars.next();
+                                    column += 1;
+                                }
+                            }
                             _ => {
-                                string.push(next_ch);
+                                string.push(chars.next().unwrap());
                                 column += 1;
                             }
                         }
                     }
                     
                     tokens.push(Token::String(string));
-                    column += 1;
                 }
                 
                 // Identifiers and keywords
@@ -286,6 +344,7 @@ impl Parser {
                         if ch.is_alphanumeric() || ch == '_' {
                             identifier.push(ch);
                             chars.next();
+                            column += 1;
                         } else {
                             break;
                         }
@@ -320,122 +379,183 @@ impl Parser {
                         "FUNCTION" => Token::Function,
                         "SUB" => Token::Sub,
                         "EXIT" => Token::Exit,
+                        "AND" => Token::And,
+                        "OR" => Token::Or,
+                        "NOT" => Token::Not,
+                        "SIN" => Token::Identifier(identifier.clone()),
+                        "COS" => Token::Identifier(identifier.clone()),
+                        "TAN" => Token::Identifier(identifier.clone()),
+                        "ASIN" => Token::Identifier(identifier.clone()),
+                        "ACOS" => Token::Identifier(identifier.clone()),
+                        "ATAN" => Token::Identifier(identifier.clone()),
+                        "EXP" => Token::Identifier(identifier.clone()),
+                        "LN" => Token::Identifier(identifier.clone()),
+                        "LOG" => Token::Identifier(identifier.clone()),
+                        "SQRT" => Token::Identifier(identifier.clone()),
+                        "ABS" => Token::Identifier(identifier.clone()),
+                        "FACTORIAL" => Token::Identifier(identifier.clone()),
+                        "PI" => Token::Identifier(identifier.clone()),
+                        "E" => Token::Identifier(identifier.clone()),
                         _ => Token::Identifier(identifier.clone()),
                     };
                     
                     tokens.push(token);
-                    column += identifier.len();
                 }
                 
                 // Operators and delimiters
                 '+' => {
+                    chars.next();
                     tokens.push(Token::Plus);
                     column += 1;
                 }
                 '-' => {
+                    chars.next();
                     tokens.push(Token::Minus);
                     column += 1;
                 }
                 '*' => {
+                    chars.next();
                     tokens.push(Token::Multiply);
                     column += 1;
                 }
                 '/' => {
+                    chars.next();
                     tokens.push(Token::Divide);
                     column += 1;
                 }
                 '%' => {
+                    chars.next();
                     tokens.push(Token::Modulo);
                     column += 1;
                 }
                 '^' => {
+                    chars.next();
                     tokens.push(Token::Power);
                     column += 1;
                 }
                 '=' => {
-                    tokens.push(Token::Assign);
+                    chars.next();
+                    tokens.push(Token::Equal);
                     column += 1;
                 }
                 '<' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        tokens.push(Token::LessEqual);
-                        column += 2;
-                    } else if chars.peek() == Some(&'>') {
-                        chars.next();
-                        tokens.push(Token::NotEqual);
-                        column += 2;
+                    chars.next();
+                    column += 1;
+                    if let Some(&next_ch) = chars.peek() {
+                        if next_ch == '=' {
+                            chars.next();
+                            tokens.push(Token::LessEqual);
+                            column += 1;
+                        } else if next_ch == '>' {
+                            chars.next();
+                            tokens.push(Token::NotEqual);
+                            column += 1;
+                        } else {
+                            tokens.push(Token::LessThan);
+                        }
                     } else {
                         tokens.push(Token::LessThan);
-                        column += 1;
                     }
                 }
                 '>' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        tokens.push(Token::GreaterEqual);
-                        column += 2;
+                    chars.next();
+                    column += 1;
+                    if let Some(&next_ch) = chars.peek() {
+                        if next_ch == '=' {
+                            chars.next();
+                            tokens.push(Token::GreaterEqual);
+                            column += 1;
+                        } else {
+                            tokens.push(Token::GreaterThan);
+                        }
                     } else {
                         tokens.push(Token::GreaterThan);
-                        column += 1;
                     }
                 }
                 '(' => {
+                    chars.next();
                     tokens.push(Token::LeftParen);
                     column += 1;
                 }
                 ')' => {
+                    chars.next();
                     tokens.push(Token::RightParen);
                     column += 1;
                 }
                 '[' => {
+                    chars.next();
                     tokens.push(Token::LeftBracket);
                     column += 1;
                 }
                 ']' => {
+                    chars.next();
                     tokens.push(Token::RightBracket);
                     column += 1;
                 }
                 ',' => {
+                    chars.next();
                     tokens.push(Token::Comma);
                     column += 1;
                 }
                 ';' => {
+                    chars.next();
                     tokens.push(Token::Semicolon);
                     column += 1;
                 }
                 ':' => {
+                    chars.next();
                     tokens.push(Token::Colon);
                     column += 1;
                 }
-                
-                // Unknown character
                 _ => {
                     return Err(UBasicError::syntax(
-                        &format!("Unexpected character: '{}'", ch),
-                        line,
-                        column,
+                        &format!("Unexpected character: {}", ch),
+                        Some(line),
+                        Some(column),
                     ));
                 }
             }
         }
-        
+
         tokens.push(Token::Eof);
         Ok(tokens)
     }
 
-    /// Parse a list of statements
+    /// Parse a list of statements, supporting line numbers
     fn parse_statements(&mut self) -> UBasicResult<Vec<ASTNode>> {
         let mut statements = Vec::new();
         
         while !self.is_at_end() && self.peek() != &Token::Eof {
-            if let Some(stmt) = self.parse_statement()? {
-                statements.push(stmt);
+            // Check for a line number at the start of a line
+            let mut line_number = None;
+            if let Token::Number(num) = self.peek() {
+                if let Ok(n) = num.parse::<usize>() {
+                    // Only treat as line number if at the start of a line
+                    line_number = Some(n);
+                    self.advance();
+                }
             }
             
-            // Skip newlines between statements
+            let mut line_statements = Vec::new();
+            // Parse statements until newline or EOF
+            while !self.is_at_end() && self.peek() != &Token::Newline && self.peek() != &Token::Eof {
+                if let Some(statement) = self.parse_statement()? {
+                    line_statements.push(statement);
+                }
+                // Support statement separator ':'
+                if self.peek() == &Token::Colon {
+                    self.advance();
+                }
+            }
+            // Skip newlines between lines
             while self.peek() == &Token::Newline {
                 self.advance();
+            }
+            if !line_statements.is_empty() || line_number.is_some() {
+                statements.push(ASTNode::Line {
+                    number: line_number,
+                    statements: line_statements,
+                });
             }
         }
         
@@ -456,70 +576,324 @@ impl Parser {
             Token::End => self.parse_end(),
             Token::Stop => self.parse_stop(),
             Token::Input => self.parse_input(),
+            Token::Identifier(_) => self.parse_expression_statement(),
             Token::Newline => {
                 self.advance();
                 Ok(None)
             }
-            _ => self.parse_expression_statement(),
+            Token::Dim => self.parse_dim(),
+            _ => {
+                let expr = self.parse_expression()?;
+                Ok(Some(expr))
+            }
         }
     }
 
-    /// Parse an assignment statement
+    /// Parse an assignment statement (LET x = y)
     fn parse_assignment(&mut self) -> UBasicResult<Option<ASTNode>> {
-        self.expect(Token::Let)?;
+        if self.peek() == &Token::Let {
+            self.advance(); // Consume LET
+        }
         
-        let variable = match self.advance() {
-            Token::Identifier(name) => name,
+        let variable = match self.peek() {
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                name
+            }
             _ => {
                 return Err(UBasicError::syntax(
-                    "Expected variable name after LET",
-                    self.current_line(),
-                    self.current_column(),
+                    "Expected variable name in assignment",
+                    Some(self.current_line()),
+                    Some(self.current_column()),
                 ));
             }
         };
         
-        self.expect(Token::Assign)?;
+        // Handle array access
+        let mut indices = Vec::new();
+        if self.peek() == &Token::LeftBracket {
+            self.advance(); // Consume [
+            indices.push(self.parse_expression()?);
+            while self.peek() == &Token::Comma {
+                self.advance(); // Consume comma
+                indices.push(self.parse_expression()?);
+            }
+            self.expect(Token::RightBracket)?;
+        }
+        
+        // Expect equals sign
+        if self.peek() != &Token::Equal {
+            return Err(UBasicError::syntax(
+                "Expected '=' in assignment",
+                Some(self.current_line()),
+                Some(self.current_column()),
+            ));
+        }
+        self.advance(); // Consume =
         
         let value = self.parse_expression()?;
         
-        Ok(Some(ASTNode::Assignment {
-            variable,
-            value: Box::new(value),
-        }))
+        if indices.is_empty() {
+            Ok(Some(ASTNode::Assignment {
+                variable,
+                value: Box::new(value),
+            }))
+        } else {
+            // This would be an array assignment - for now, treat as regular assignment
+            Ok(Some(ASTNode::Assignment {
+                variable,
+                value: Box::new(value),
+            }))
+        }
     }
 
-    /// Parse a print statement
+    /// Parse a PRINT statement
     fn parse_print(&mut self) -> UBasicResult<Option<ASTNode>> {
-        self.expect(Token::Print)?;
+        self.advance(); // Consume PRINT
         
         let mut expressions = Vec::new();
         
-        if !self.is_at_end() && self.peek() != &Token::Newline {
-            expressions.push(self.parse_expression()?);
-            
-            while self.peek() == &Token::Comma || self.peek() == &Token::Semicolon {
-                self.advance();
-                if self.peek() != &Token::Newline {
-                    expressions.push(self.parse_expression()?);
-                }
+        while !self.is_at_end() && self.peek() != &Token::Newline && self.peek() != &Token::Eof {
+            if self.peek() == &Token::Comma || self.peek() == &Token::Semicolon {
+                self.advance(); // Consume separator
+                continue;
             }
+            
+            expressions.push(self.parse_expression()?);
         }
         
         Ok(Some(ASTNode::PrintStatement { expressions }))
     }
 
-    /// Parse an expression
+    /// Parse an IF statement
+    fn parse_if(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume IF
+        
+        let condition = self.parse_expression()?;
+        
+        if self.peek() != &Token::Then {
+            return Err(UBasicError::syntax(
+                "Expected THEN after IF condition",
+                Some(self.current_line()),
+                Some(self.current_column()),
+            ));
+        }
+        self.advance(); // Consume THEN
+        
+        let mut then_branch = Vec::new();
+        let mut else_branch = None;
+        
+        // Parse THEN branch
+        while !self.is_at_end() && self.peek() != &Token::Else && self.peek() != &Token::Newline {
+            if let Some(statement) = self.parse_statement()? {
+                then_branch.push(statement);
+            }
+        }
+        
+        // Parse ELSE branch if present
+        if self.peek() == &Token::Else {
+            self.advance(); // Consume ELSE
+            let mut else_statements = Vec::new();
+            while !self.is_at_end() && self.peek() != &Token::Newline {
+                if let Some(statement) = self.parse_statement()? {
+                    else_statements.push(statement);
+                }
+            }
+            else_branch = Some(else_statements);
+        }
+        
+        Ok(Some(ASTNode::IfStatement {
+            condition: Box::new(condition),
+            then_branch,
+            else_branch,
+        }))
+    }
+
+    /// Parse a FOR loop
+    fn parse_for(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume FOR
+        
+        let variable = match self.peek() {
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                name
+            }
+            _ => {
+                return Err(UBasicError::syntax(
+                    "Expected variable name in FOR loop",
+                    Some(self.current_line()),
+                    Some(self.current_column()),
+                ));
+            }
+        };
+        
+        self.expect(Token::Equal)?;
+        let start = self.parse_expression()?;
+        
+        self.expect(Token::To)?;
+        let end = self.parse_expression()?;
+        
+        let mut step = None;
+        if self.peek() == &Token::Step {
+            self.advance(); // Consume STEP
+            step = Some(Box::new(self.parse_expression()?));
+        }
+        
+        let mut body = Vec::new();
+        while !self.is_at_end() && self.peek() != &Token::Next {
+            if let Some(statement) = self.parse_statement()? {
+                body.push(statement);
+            }
+        }
+        
+        if self.peek() == &Token::Next {
+            self.advance(); // Consume NEXT
+        }
+        
+        Ok(Some(ASTNode::ForLoop {
+            variable,
+            start: Box::new(start),
+            end: Box::new(end),
+            step,
+            body,
+        }))
+    }
+
+    /// Parse a WHILE loop
+    fn parse_while(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume WHILE
+        
+        let condition = self.parse_expression()?;
+        
+        let mut body = Vec::new();
+        while !self.is_at_end() && self.peek() != &Token::Wend {
+            if let Some(statement) = self.parse_statement()? {
+                body.push(statement);
+            }
+        }
+        
+        if self.peek() == &Token::Wend {
+            self.advance(); // Consume WEND
+        }
+        
+        Ok(Some(ASTNode::WhileLoop {
+            condition: Box::new(condition),
+            body,
+        }))
+    }
+
+    /// Parse a GOTO statement
+    fn parse_goto(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume GOTO
+        
+        let line_number = match self.peek() {
+            Token::Number(num) => {
+                let num = num.parse::<usize>().unwrap_or(0);
+                self.advance();
+                num
+            }
+            _ => {
+                return Err(UBasicError::syntax(
+                    "Expected line number after GOTO",
+                    Some(self.current_line()),
+                    Some(self.current_column()),
+                ));
+            }
+        };
+        
+        Ok(Some(ASTNode::GotoStatement { line_number }))
+    }
+
+    /// Parse a GOSUB statement
+    fn parse_gosub(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume GOSUB
+        
+        let line_number = match self.peek() {
+            Token::Number(num) => {
+                let num = num.parse::<usize>().unwrap_or(0);
+                self.advance();
+                num
+            }
+            _ => {
+                return Err(UBasicError::syntax(
+                    "Expected line number after GOSUB",
+                    Some(self.current_line()),
+                    Some(self.current_column()),
+                ));
+            }
+        };
+        
+        Ok(Some(ASTNode::GosubStatement { line_number }))
+    }
+
+    /// Parse a RETURN statement
+    fn parse_return(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume RETURN
+        Ok(Some(ASTNode::ReturnStatement))
+    }
+
+    /// Parse an END statement
+    fn parse_end(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume END
+        Ok(Some(ASTNode::EndStatement))
+    }
+
+    /// Parse a STOP statement
+    fn parse_stop(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume STOP
+        Ok(Some(ASTNode::StopStatement))
+    }
+
+    /// Parse an INPUT statement
+    fn parse_input(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume INPUT
+        
+        let mut variables = Vec::new();
+        let mut prompt = None;
+        
+        // Check for prompt string
+        if self.peek() == &Token::String(_) {
+            if let Token::String(prompt_str) = self.advance() {
+                prompt = Some(prompt_str);
+            }
+        }
+        
+        // Parse variable list
+        while !self.is_at_end() && self.peek() != &Token::Newline {
+            if self.peek() == &Token::Comma {
+                self.advance(); // Consume comma
+                continue;
+            }
+            
+            if let Token::Identifier(name) = self.peek() {
+                variables.push(name.clone());
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        Ok(Some(ASTNode::InputStatement { variables, prompt }))
+    }
+
+    /// Parse an expression as a statement
+    fn parse_expression_statement(&mut self) -> UBasicResult<Option<ASTNode>> {
+        Ok(Some(self.parse_expression()?))
+    }
+
+    /// Parse an expression with operator precedence
     fn parse_expression(&mut self) -> UBasicResult<ASTNode> {
         self.parse_or()
     }
 
-    /// Parse OR expressions
+    /// Parse OR expressions (lowest precedence)
     fn parse_or(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_and()?;
         
         while self.peek() == &Token::Or {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_and()?;
             
             left = ASTNode::BinaryOp {
@@ -537,7 +911,7 @@ impl Parser {
         let mut left = self.parse_equality()?;
         
         while self.peek() == &Token::And {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_equality()?;
             
             left = ASTNode::BinaryOp {
@@ -550,12 +924,12 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse equality expressions
+    /// Parse equality expressions (==, !=)
     fn parse_equality(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_comparison()?;
         
         while matches!(self.peek(), Token::Equal | Token::NotEqual) {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_comparison()?;
             
             left = ASTNode::BinaryOp {
@@ -568,7 +942,7 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse comparison expressions
+    /// Parse comparison expressions (<, <=, >, >=)
     fn parse_comparison(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_term()?;
         
@@ -576,7 +950,7 @@ impl Parser {
             self.peek(),
             Token::LessThan | Token::LessEqual | Token::GreaterThan | Token::GreaterEqual
         ) {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_term()?;
             
             left = ASTNode::BinaryOp {
@@ -589,12 +963,12 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse term expressions (addition and subtraction)
+    /// Parse terms (+, -)
     fn parse_term(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_factor()?;
         
         while matches!(self.peek(), Token::Plus | Token::Minus) {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_factor()?;
             
             left = ASTNode::BinaryOp {
@@ -607,12 +981,12 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse factor expressions (multiplication and division)
+    /// Parse factors (*, /, %)
     fn parse_factor(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_power()?;
         
         while matches!(self.peek(), Token::Multiply | Token::Divide | Token::Modulo) {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_power()?;
             
             left = ASTNode::BinaryOp {
@@ -625,12 +999,12 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse power expressions
+    /// Parse power expressions (^)
     fn parse_power(&mut self) -> UBasicResult<ASTNode> {
         let mut left = self.parse_primary()?;
         
         while self.peek() == &Token::Power {
-            let operator = self.advance().clone();
+            let operator = self.advance();
             let right = self.parse_primary()?;
             
             left = ASTNode::BinaryOp {
@@ -643,97 +1017,133 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse primary expressions
+    /// Parse primary expressions (literals, identifiers, parenthesized expressions)
     fn parse_primary(&mut self) -> UBasicResult<ASTNode> {
-        match self.advance() {
-            Token::Number(num_str) => {
-                // Try to parse as integer first, then float
+        match self.peek() {
+            Token::Number(num) => {
+                let num_str = num.clone();
+                self.advance();
+                
+                // Try to parse as different numeric types
                 if let Ok(int_val) = num_str.parse::<i64>() {
-                    Ok(ASTNode::Number(UBasicValue::from(int_val)))
+                    Ok(ASTNode::Number(UBasicValue::Integer(int_val)))
                 } else if let Ok(float_val) = num_str.parse::<f64>() {
-                    Ok(ASTNode::Number(UBasicValue::from(float_val)))
+                    Ok(ASTNode::Number(UBasicValue::Float(float_val)))
                 } else {
-                    Err(UBasicError::invalid_number(num_str))
+                    Err(UBasicError::syntax(
+                        &format!("Invalid number: {}", num_str),
+                        Some(self.current_line()),
+                        Some(self.current_column()),
+                    ))
                 }
             }
-            Token::String(s) => Ok(ASTNode::String(s)),
-            Token::Identifier(name) => Ok(ASTNode::Identifier(name)),
+            
+            Token::String(s) => {
+                let string = s.clone();
+                self.advance();
+                Ok(ASTNode::String(string))
+            }
+            
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                
+                // Check for function call
+                if self.peek() == &Token::LeftParen {
+                    self.advance(); // Consume (
+                    
+                    let mut arguments = Vec::new();
+                    if self.peek() != &Token::RightParen {
+                        arguments.push(self.parse_expression()?);
+                        while self.peek() == &Token::Comma {
+                            self.advance(); // Consume comma
+                            arguments.push(self.parse_expression()?);
+                        }
+                    }
+                    
+                    self.expect(Token::RightParen)?;
+                    
+                    Ok(ASTNode::FunctionCall { name, arguments })
+                } else if self.peek() == &Token::LeftBracket {
+                    // Array access
+                    self.advance(); // Consume [
+                    
+                    let mut indices = Vec::new();
+                    indices.push(self.parse_expression()?);
+                    while self.peek() == &Token::Comma {
+                        self.advance(); // Consume comma
+                        indices.push(self.parse_expression()?);
+                    }
+                    
+                    self.expect(Token::RightBracket)?;
+                    
+                    Ok(ASTNode::ArrayAccess { array: name, indices })
+                } else {
+                    Ok(ASTNode::Identifier(name))
+                }
+            }
+            
             Token::LeftParen => {
+                self.advance(); // Consume (
                 let expr = self.parse_expression()?;
                 self.expect(Token::RightParen)?;
                 Ok(expr)
             }
+            
             Token::Minus => {
+                self.advance(); // Consume -
                 let operand = self.parse_primary()?;
                 Ok(ASTNode::UnaryOp {
                     operator: Token::Minus,
                     operand: Box::new(operand),
                 })
             }
+            
             Token::Not => {
+                self.advance(); // Consume NOT
                 let operand = self.parse_primary()?;
                 Ok(ASTNode::UnaryOp {
                     operator: Token::Not,
                     operand: Box::new(operand),
                 })
             }
-            _ => Err(UBasicError::syntax(
-                "Unexpected token in expression",
-                self.current_line(),
-                self.current_column(),
-            )),
+            
+            _ => {
+                Err(UBasicError::syntax(
+                    &format!("Unexpected token: {:?}", self.peek()),
+                    Some(self.current_line()),
+                    Some(self.current_column()),
+                ))
+            }
         }
     }
 
-    // Helper methods for parsing other statements
-    fn parse_if(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_for(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_while(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_goto(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_gosub(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_return(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_end(&mut self) -> UBasicResult<Option<ASTNode>> {
-        self.expect(Token::End)?;
-        Ok(Some(ASTNode::EndStatement))
-    }
-
-    fn parse_stop(&mut self) -> UBasicResult<Option<ASTNode>> {
-        self.expect(Token::Stop)?;
-        Ok(Some(ASTNode::StopStatement))
-    }
-
-    fn parse_input(&mut self) -> UBasicResult<Option<ASTNode>> {
-        // Simplified implementation
-        Ok(None)
-    }
-
-    fn parse_expression_statement(&mut self) -> UBasicResult<Option<ASTNode>> {
-        let expr = self.parse_expression()?;
-        Ok(Some(expr))
+    /// Parse a DIM statement
+    fn parse_dim(&mut self) -> UBasicResult<Option<ASTNode>> {
+        self.advance(); // Consume DIM
+        let name = match self.peek() {
+            Token::Identifier(n) => {
+                let n = n.clone();
+                self.advance();
+                n
+            }
+            _ => {
+                return Err(UBasicError::syntax(
+                    "Expected array name after DIM",
+                    Some(self.current_line()),
+                    Some(self.current_column()),
+                ));
+            }
+        };
+        self.expect(Token::LeftBracket)?;
+        let mut dimensions = Vec::new();
+        dimensions.push(self.parse_expression()?);
+        while self.peek() == &Token::Comma {
+            self.advance();
+            dimensions.push(self.parse_expression()?);
+        }
+        self.expect(Token::RightBracket)?;
+        Ok(Some(ASTNode::DimStatement { name, dimensions }))
     }
 
     // Parser helper methods
@@ -741,23 +1151,27 @@ impl Parser {
         if !self.is_at_end() {
             self.current += 1;
         }
-        self.previous().clone()
+        self.previous()
     }
 
     fn peek(&self) -> &Token {
         if self.is_at_end() {
-            &Token::Eof
+            &self.tokens[self.tokens.len() - 1]
         } else {
             &self.tokens[self.current]
         }
     }
 
-    fn previous(&self) -> &Token {
-        &self.tokens[self.current - 1]
+    fn previous(&self) -> Token {
+        if self.current == 0 {
+            Token::Eof
+        } else {
+            self.tokens[self.current - 1].clone()
+        }
     }
 
     fn is_at_end(&self) -> bool {
-        self.current >= self.tokens.len()
+        self.current >= self.tokens.len() - 1
     }
 
     fn expect(&mut self, token: Token) -> UBasicResult<()> {
@@ -767,8 +1181,8 @@ impl Parser {
         } else {
             Err(UBasicError::syntax(
                 &format!("Expected {:?}, got {:?}", token, self.peek()),
-                self.current_line(),
-                self.current_column(),
+                Some(self.current_line()),
+                Some(self.current_column()),
             ))
         }
     }
@@ -780,7 +1194,7 @@ impl Parser {
 
     fn current_column(&self) -> usize {
         // Simplified - in a real implementation, you'd track column numbers
-        1
+        self.current
     }
 }
 
@@ -834,5 +1248,72 @@ mod tests {
         
         // Should parse correctly
         assert!(matches!(ast, ASTNode::Program { .. }));
+    }
+
+    #[test]
+    fn test_parse_assignment() {
+        let mut parser = Parser::new();
+        let ast = parser.parse("LET X = 42").unwrap();
+        match ast {
+            ASTNode::Program { statements } => {
+                assert!(matches!(statements[0], ASTNode::Assignment { .. }));
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_arithmetic_expression() {
+        let mut parser = Parser::new();
+        let ast = parser.parse("LET Y = 2 + 3 * 4").unwrap();
+        match ast {
+            ASTNode::Program { statements } => {
+                assert!(matches!(statements[0], ASTNode::Assignment { .. }));
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_statement() {
+        let mut parser = Parser::new();
+        let ast = parser.parse("IF 1 THEN PRINT \"OK\" ELSE PRINT \"NO\"").unwrap();
+        match ast {
+            ASTNode::Program { statements } => {
+                assert!(matches!(statements[0], ASTNode::IfStatement { .. }));
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_for_loop() {
+        let mut parser = Parser::new();
+        let ast = parser.parse("FOR I = 1 TO 3\nPRINT I\nNEXT").unwrap();
+        match ast {
+            ASTNode::Program { statements } => {
+                assert!(matches!(statements[0], ASTNode::ForLoop { .. }));
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_print_statement() {
+        let mut parser = Parser::new();
+        let ast = parser.parse("PRINT 123, \"abc\"").unwrap();
+        match ast {
+            ASTNode::Program { statements } => {
+                assert!(matches!(statements[0], ASTNode::PrintStatement { .. }));
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error() {
+        let mut parser = Parser::new();
+        let result = parser.parse("LET = 5");
+        assert!(result.is_err());
     }
 } 

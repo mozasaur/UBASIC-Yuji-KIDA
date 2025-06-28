@@ -1,0 +1,8 @@
+10 DIM A[5]
+20 FOR I = 0 TO 4
+30 LET A[I] = I * 2
+40 NEXT I
+50 FOR I = 0 TO 4
+60 PRINT "A[", I, "] = ", A[I]
+70 NEXT I
+80 END 

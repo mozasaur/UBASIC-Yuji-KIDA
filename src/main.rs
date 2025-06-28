@@ -3,8 +3,8 @@
 //! This is the main entry point for the UBASIC Rust interpreter.
 
 use clap::{Parser, Subcommand};
-use ubasic_rust::UBasic;
 use std::path::PathBuf;
+use ubasic_rust::{UBasic, UBasicResult};
 
 #[derive(Parser)]
 #[command(name = "ubasic-rust")]
@@ -16,227 +16,105 @@ struct Cli {
 
     /// Input file to execute
     #[arg(short, long)]
-    file: Option<String>,
+    file: Option<PathBuf>,
 
-    /// Code to execute directly
+    /// Code to evaluate
     #[arg(short, long)]
-    code: Option<String>,
-
-    /// Run in interactive mode
-    #[arg(short, long)]
-    interactive: bool,
-
-    /// History file for interactive mode
-    #[arg(long, default_value = "~/.ubasic_history")]
-    history: Option<String>,
-
-    /// Set precision for calculations
-    #[arg(long, default_value = "64")]
-    precision: Option<u32>,
+    eval: Option<String>,
 
     /// Enable verbose output
     #[arg(short, long)]
     verbose: bool,
+
+    /// Set precision for calculations
+    #[arg(short, long, default_value = "64")]
+    precision: u32,
+
+    /// History file path
+    #[arg(long, default_value = "~/.ubasic_history")]
+    history_file: String,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run in interactive mode
+    /// Start interactive mode
     Interactive {
-        /// History file
-        #[arg(long, default_value = "~/.ubasic_history")]
-        history: Option<String>,
+        /// Enable syntax highlighting
+        #[arg(long)]
+        syntax_highlighting: bool,
     },
-    
-    /// Execute a file
-    Run {
-        /// File to execute
-        file: String,
-        
-        /// Enable verbose output
-        #[arg(short, long)]
-        verbose: bool,
+    /// Run tests
+    Test {
+        /// Test file to run
+        file: PathBuf,
     },
-    
-    /// Execute code directly
-    Eval {
-        /// Code to execute
-        code: String,
-        
-        /// Enable verbose output
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    /// Show version and build information
-    Version,
 }
 
-fn main() {
+fn main() -> UBasicResult<()> {
     let cli = Cli::parse();
 
     // Initialize logging
-    env_logger::init();
-
-    // Create UBASIC instance with specified precision
-    let precision = cli.precision.unwrap_or(64);
-    let mut ubasic = UBasic::with_precision(precision);
-
     if cli.verbose {
-        println!("UBASIC Rust v{}", env!("CARGO_PKG_VERSION"));
-        println!("Precision: {} bits", precision);
-        println!();
+        env_logger::init();
     }
+
+    // Create UBASIC engine with specified precision
+    let mut ubasic = UBasic::with_precision(cli.precision);
 
     match &cli.command {
-        Some(Commands::Interactive { history }) => {
-            let history_file = history.clone().unwrap_or_else(|| "~/.ubasic_history".to_string());
-            run_interactive(&mut ubasic, &history_file, cli.verbose);
+        Some(Commands::Interactive { syntax_highlighting }) => {
+            println!("UBASIC Rust Interactive Mode");
+            println!("Type 'help' for commands, 'exit' to quit");
+            if *syntax_highlighting {
+                println!("Syntax highlighting enabled");
+            }
+            
+            // Run interactive mode
+            ubasic.run_interactive()?;
         }
-        Some(Commands::Run { file, verbose }) => {
-            run_file(&mut ubasic, file, *verbose);
-        }
-        Some(Commands::Eval { code, verbose }) => {
-            run_code(&mut ubasic, code, *verbose);
-        }
-        Some(Commands::Version) => {
-            show_version();
+        Some(Commands::Test { file }) => {
+            println!("Running tests from: {}", file.display());
+            // TODO: Implement test runner
+            println!("Test runner not yet implemented");
         }
         None => {
-            // Handle direct arguments
-            if cli.interactive {
-                let history_file = cli.history.unwrap_or_else(|| "~/.ubasic_history".to_string());
-                run_interactive(&mut ubasic, &history_file, cli.verbose);
-            } else if let Some(file) = cli.file {
-                run_file(&mut ubasic, &file, cli.verbose);
-            } else if let Some(code) = cli.code {
-                run_code(&mut ubasic, &code, cli.verbose);
+            // Handle file execution or code evaluation
+            if let Some(file_path) = cli.file {
+                println!("Executing file: {}", file_path.display());
+                let code = std::fs::read_to_string(file_path)?;
+                let result = ubasic.run(&code)?;
+                println!("Result: {}", result);
+            } else if let Some(code) = cli.eval {
+                println!("Evaluating code: {}", code);
+                let result = ubasic.run(&code)?;
+                println!("Result: {}", result);
             } else {
                 // Default to interactive mode
-                let history_file = cli.history.unwrap_or_else(|| "~/.ubasic_history".to_string());
-                run_interactive(&mut ubasic, &history_file, cli.verbose);
+                println!("UBASIC Rust Interactive Mode");
+                println!("Type 'help' for commands, 'exit' to quit");
+                ubasic.run_interactive()?;
             }
         }
     }
+
+    Ok(())
 }
 
-fn run_interactive(ubasic: &mut UBasic, history_file: &str, verbose: bool) {
-    if verbose {
-        println!("Starting interactive mode with history file: {}", history_file);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_creation() {
+        let args = vec!["ubasic-rust", "--precision", "128"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(cli.precision, 128);
     }
 
-    // Expand tilde in history file path
-    let history_path = if history_file.starts_with('~') {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        history_file.replacen('~', &home, 1)
-    } else {
-        history_file.to_string()
-    };
-
-    // Create history directory if it doesn't exist
-    if let Some(parent) = PathBuf::from(&history_path).parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("Warning: Could not create history directory: {}", e);
-            }
-        }
+    #[test]
+    fn test_interactive_command() {
+        let args = vec!["ubasic-rust", "interactive"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Interactive { .. })));
     }
-
-    match ubasic.run_interactive() {
-        Ok(_) => {
-            if verbose {
-                println!("Interactive session ended");
-            }
-        }
-        Err(e) => {
-            eprintln!("Error in interactive mode: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run_file(ubasic: &mut UBasic, filename: &str, verbose: bool) {
-    if verbose {
-        println!("Executing file: {}", filename);
-    }
-
-    match std::fs::read_to_string(filename) {
-        Ok(content) => {
-            if verbose {
-                println!("File loaded successfully ({} bytes)", content.len());
-            }
-
-            match ubasic.run(&content) {
-                Ok(result) => {
-                    if result != ubasic_rust::UBasicValue::Null {
-                        println!("= {}", result);
-                    }
-                    if verbose {
-                        println!("File executed successfully");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error executing file: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", filename, e);
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run_code(ubasic: &mut UBasic, code: &str, verbose: bool) {
-    if verbose {
-        println!("Executing code: {}", code);
-    }
-
-    match ubasic.run(code) {
-        Ok(result) => {
-            if result != ubasic_rust::UBasicValue::Null {
-                println!("= {}", result);
-            }
-            if verbose {
-                println!("Code executed successfully");
-            }
-        }
-        Err(e) => {
-            eprintln!("Error executing code: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
-fn show_version() {
-    println!("UBASIC Rust v{}", env!("CARGO_PKG_VERSION"));
-    println!("A modern Rust implementation of UBASIC");
-    println!("Advanced BASIC interpreter with mathematical capabilities");
-    println!();
-    println!("Features:");
-    println!("  • Arbitrary precision arithmetic");
-    println!("  • Complex numbers and mathematical functions");
-    println!("  • Graphics support (ggez, egui)");
-    println!("  • Interactive console with syntax highlighting");
-    println!("  • File I/O and data persistence");
-    println!("  • Concurrent execution with async/await");
-    println!();
-    println!("Built with Rust {}", env!("RUST_VERSION"));
-    println!("Target: {}", env!("TARGET"));
-    println!("Build date: {}", env!("VERGEN_BUILD_TIMESTAMP"));
-}
-
-fn print_help() {
-    println!("UBASIC Rust Commands:");
-    println!("  help     - Show this help");
-    println!("  clear    - Clear all variables");
-    println!("  exit     - Exit the interpreter");
-    println!("  quit     - Exit the interpreter");
-    println!();
-    println!("Examples:");
-    println!("  LET x = 42");
-    println!("  PRINT x");
-    println!("  LET y = 2 + 3 * 4");
-    println!("  PRINT \"Hello, World!\"");
 } 
