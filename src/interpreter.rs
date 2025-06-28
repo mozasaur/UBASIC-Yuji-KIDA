@@ -5,6 +5,9 @@
 use crate::errors::{UBasicError, UBasicResult};
 use crate::types::{UBasicValue, ProgramState};
 use crate::parser::{Parser, ASTNode, Token};
+use crate::console::Console;
+use crate::math::MathEngine;
+use rug::{Float, Integer, ops::Pow};
 use std::collections::HashMap;
 
 /// Main UBASIC interpreter
@@ -12,6 +15,8 @@ pub struct UBasicEngine {
     parser: Parser,
     state: ProgramState,
     output: Vec<String>,
+    console: Console,
+    math: MathEngine,
 }
 
 impl UBasicEngine {
@@ -21,6 +26,19 @@ impl UBasicEngine {
             parser: Parser::new(),
             state: ProgramState::new(),
             output: Vec::new(),
+            console: Console::new(),
+            math: MathEngine::new(),
+        }
+    }
+
+    /// Create a new UBASIC interpreter with history file
+    pub fn with_history(history_file: String) -> Self {
+        Self {
+            parser: Parser::new(),
+            state: ProgramState::new(),
+            output: Vec::new(),
+            console: Console::with_history(history_file),
+            math: MathEngine::new(),
         }
     }
 
@@ -32,16 +50,58 @@ impl UBasicEngine {
 
     /// Run BASIC code in interactive mode
     pub fn run_interactive(&mut self) -> UBasicResult<()> {
-        // Simplified implementation - would use rustyline in full version
-        println!("UBASIC Rust Interactive Mode");
-        println!("Type 'exit' to quit");
-        
+        self.console.println("UBASIC Rust Interactive Mode");
+        self.console.println("Type 'exit' to quit, 'help' for help");
+        self.console.println();
+
         loop {
-            print!("> ");
-            // In a real implementation, this would read from stdin
-            break;
+            match self.console.read_line()? {
+                Some(input) => {
+                    let input = input.trim();
+                    if input.is_empty() {
+                        continue;
+                    }
+
+                    if input == "exit" || input == "quit" {
+                        break;
+                    }
+
+                    if input == "help" {
+                        self.console.show_help();
+                        continue;
+                    }
+
+                    if input == "clear" {
+                        self.clear();
+                        self.console.println("Memory cleared");
+                        continue;
+                    }
+
+                    if input == "cls" {
+                        self.console.clear_screen();
+                        continue;
+                    }
+
+                    match self.run(input) {
+                        Ok(result) => {
+                            if result != UBasicValue::Null {
+                                self.console.println(&format!("= {}", result));
+                            }
+                        }
+                        Err(e) => {
+                            self.console.println(&format!("Error: {}", e));
+                        }
+                    }
+
+                    // Update console with current variables for highlighting
+                    self.console.update_variables(&self.state.variables);
+                }
+                None => break, // EOF or interrupt
+            }
         }
-        
+
+        // Save history before exiting
+        self.console.save_history()?;
         Ok(())
     }
 
@@ -106,24 +166,251 @@ impl UBasicEngine {
                 }
                 
                 let output_line = output_parts.join(" ");
-                println!("{}", output_line);
+                self.console.println(&output_line);
                 self.output.push(output_line);
                 
                 Ok(UBasicValue::Null)
             }
             
+            ASTNode::InputStatement { variables, prompt } => {
+                if let Some(prompt_text) = prompt {
+                    self.console.print(prompt_text);
+                }
+                
+                match self.console.read_line()? {
+                    Some(input) => {
+                        let values: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
+                        
+                        for (i, var_name) in variables.iter().enumerate() {
+                            if i < values.len() {
+                                let value = self.parse_input_value(values[i])?;
+                                self.state.set_variable(var_name.clone(), value);
+                            }
+                        }
+                        
+                        Ok(UBasicValue::Null)
+                    }
+                    None => Err(UBasicError::runtime("Input interrupted".to_string(), None)),
+                }
+            }
+            
+            ASTNode::IfStatement { condition, then_branch, else_branch } => {
+                let condition_val = self.execute_node(condition)?;
+                
+                if self.is_truthy(&condition_val) {
+                    let mut last_value = UBasicValue::Null;
+                    for stmt in then_branch {
+                        last_value = self.execute_node(stmt)?;
+                    }
+                    Ok(last_value)
+                } else if let Some(else_statements) = else_branch {
+                    let mut last_value = UBasicValue::Null;
+                    for stmt in else_statements {
+                        last_value = self.execute_node(stmt)?;
+                    }
+                    Ok(last_value)
+                } else {
+                    Ok(UBasicValue::Null)
+                }
+            }
+            
+            ASTNode::ForLoop { variable, start, end, step, body } => {
+                let start_val = self.execute_node(start)?;
+                let end_val = self.execute_node(end)?;
+                let step_val = if let Some(step_expr) = step {
+                    self.execute_node(step_expr)?
+                } else {
+                    UBasicValue::Integer(1.into())
+                };
+                
+                // Convert to numeric values for iteration
+                let start_num = self.to_numeric(&start_val)?;
+                let end_num = self.to_numeric(&end_val)?;
+                let step_num = self.to_numeric(&step_val)?;
+                
+                let mut current = start_num;
+                let mut last_value = UBasicValue::Null;
+                
+                loop {
+                    // Check if we should continue
+                    let should_continue = if step_num >= 0.0 {
+                        current <= end_num
+                    } else {
+                        current >= end_num
+                    };
+                    
+                    if !should_continue {
+                        break;
+                    }
+                    
+                    // Set the loop variable
+                    self.state.set_variable(variable.clone(), UBasicValue::Float(current.into()));
+                    
+                    // Execute loop body
+                    for stmt in body {
+                        last_value = self.execute_node(stmt)?;
+                    }
+                    
+                    // Increment
+                    current += step_num;
+                }
+                
+                Ok(last_value)
+            }
+            
+            ASTNode::WhileLoop { condition, body } => {
+                let mut last_value = UBasicValue::Null;
+                
+                loop {
+                    let condition_val = self.execute_node(condition)?;
+                    if !self.is_truthy(&condition_val) {
+                        break;
+                    }
+                    
+                    for stmt in body {
+                        last_value = self.execute_node(stmt)?;
+                    }
+                }
+                
+                Ok(last_value)
+            }
+            
+            ASTNode::FunctionCall { name, arguments } => {
+                let mut arg_values = Vec::new();
+                for arg in arguments {
+                    arg_values.push(self.execute_node(arg)?);
+                }
+                
+                self.call_function(name, &arg_values)
+            }
+            
             ASTNode::EndStatement => {
-                // In a real implementation, this would stop execution
+                // Stop execution
                 Ok(UBasicValue::Null)
             }
             
             ASTNode::StopStatement => {
-                // In a real implementation, this would pause execution
+                // Pause execution - in interactive mode, just return
                 Ok(UBasicValue::Null)
             }
             
             // Placeholder implementations for other nodes
             _ => Ok(UBasicValue::Null),
+        }
+    }
+
+    /// Parse input value from string
+    fn parse_input_value(&self, input: &str) -> UBasicResult<UBasicValue> {
+        let input = input.trim();
+        
+        // Try to parse as number
+        if let Ok(i) = input.parse::<i64>() {
+            return Ok(UBasicValue::Integer(i.into()));
+        }
+        
+        if let Ok(f) = input.parse::<f64>() {
+            return Ok(UBasicValue::Float(f.into()));
+        }
+        
+        // If it starts and ends with quotes, it's a string
+        if input.starts_with('"') && input.ends_with('"') {
+            let s = &input[1..input.len()-1];
+            return Ok(UBasicValue::String(s.to_string()));
+        }
+        
+        // Otherwise treat as string
+        Ok(UBasicValue::String(input.to_string()))
+    }
+
+    /// Convert value to numeric for loop iteration
+    fn to_numeric(&self, value: &UBasicValue) -> UBasicResult<f64> {
+        match value {
+            UBasicValue::Integer(i) => Ok(i.to_f64()),
+            UBasicValue::Float(f) => Ok(f.to_f64()),
+            _ => Err(UBasicError::type_mismatch("numeric", &format!("{:?}", value.get_type()))),
+        }
+    }
+
+    /// Call a function
+    fn call_function(&mut self, name: &str, arguments: &[UBasicValue]) -> UBasicResult<UBasicValue> {
+        let upper_name = name.to_uppercase();
+        
+        // Built-in mathematical functions
+        match upper_name.as_str() {
+            "SIN" => {
+                if arguments.len() != 1 {
+                    return Err(UBasicError::argument_count_mismatch(1, arguments.len()));
+                }
+                self.math.sin(&arguments[0])
+            }
+            "COS" => {
+                if arguments.len() != 1 {
+                    return Err(UBasicError::argument_count_mismatch(1, arguments.len()));
+                }
+                self.math.cos(&arguments[0])
+            }
+            "TAN" => {
+                if arguments.len() != 1 {
+                    return Err(UBasicError::argument_count_mismatch(1, arguments.len()));
+                }
+                self.math.tan(&arguments[0])
+            }
+            "SQRT" => {
+                if arguments.len() != 1 {
+                    return Err(UBasicError::argument_count_mismatch(1, arguments.len()));
+                }
+                self.math.sqrt(&arguments[0])
+            }
+            "ABS" => {
+                if arguments.len() != 1 {
+                    return Err(UBasicError::argument_count_mismatch(1, arguments.len()));
+                }
+                self.math.abs(&arguments[0])
+            }
+            "PI" => {
+                if !arguments.is_empty() {
+                    return Err(UBasicError::argument_count_mismatch(0, arguments.len()));
+                }
+                Ok(self.math.pi())
+            }
+            "E" => {
+                if !arguments.is_empty() {
+                    return Err(UBasicError::argument_count_mismatch(0, arguments.len()));
+                }
+                Ok(self.math.e())
+            }
+            _ => {
+                // Check for user-defined functions
+                if let Some(function) = self.state.functions.get(name) {
+                    if function.parameters.len() != arguments.len() {
+                        return Err(UBasicError::argument_count_mismatch(
+                            function.parameters.len(),
+                            arguments.len(),
+                        ));
+                    }
+                    
+                    // Save current state
+                    let old_variables = self.state.variables.clone();
+                    
+                    // Set function parameters
+                    for (param, arg) in function.parameters.iter().zip(arguments.iter()) {
+                        self.state.set_variable(param.clone(), arg.clone());
+                    }
+                    
+                    // Execute function body
+                    let mut result = UBasicValue::Null;
+                    for line in &function.body {
+                        result = self.run(line)?;
+                    }
+                    
+                    // Restore state
+                    self.state.variables = old_variables;
+                    
+                    Ok(result)
+                } else {
+                    Err(UBasicError::function_not_found(name.to_string()))
+                }
+            }
         }
     }
 
@@ -172,10 +459,10 @@ impl UBasicEngine {
     fn add(&self, left: &UBasicValue, right: &UBasicValue) -> UBasicResult<UBasicValue> {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
-                Ok(UBasicValue::Integer(a + b))
+                Ok(UBasicValue::Integer((a + b).into()))
             }
             (UBasicValue::Float(a), UBasicValue::Float(b)) => {
-                Ok(UBasicValue::Float(a + b))
+                Ok(UBasicValue::Float((a + b).into()))
             }
             (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
                 Ok(UBasicValue::Float(Float::with_val(64, a) + b))
@@ -196,10 +483,10 @@ impl UBasicEngine {
     fn subtract(&self, left: &UBasicValue, right: &UBasicValue) -> UBasicResult<UBasicValue> {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
-                Ok(UBasicValue::Integer(a - b))
+                Ok(UBasicValue::Integer((a - b).into()))
             }
             (UBasicValue::Float(a), UBasicValue::Float(b)) => {
-                Ok(UBasicValue::Float(a - b))
+                Ok(UBasicValue::Float((a - b).into()))
             }
             (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
                 Ok(UBasicValue::Float(Float::with_val(64, a) - b))
@@ -217,10 +504,10 @@ impl UBasicEngine {
     fn multiply(&self, left: &UBasicValue, right: &UBasicValue) -> UBasicResult<UBasicValue> {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
-                Ok(UBasicValue::Integer(a * b))
+                Ok(UBasicValue::Integer((a * b).into()))
             }
             (UBasicValue::Float(a), UBasicValue::Float(b)) => {
-                Ok(UBasicValue::Float(a * b))
+                Ok(UBasicValue::Float((a * b).into()))
             }
             (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
                 Ok(UBasicValue::Float(Float::with_val(64, a) * b))
@@ -239,25 +526,25 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
                 if b == &Integer::ZERO {
-                    return Err(UBasicError::DivisionByZero);
+                    return Err(UBasicError::runtime("Division by zero".to_string(), None));
                 }
                 Ok(UBasicValue::Float(Float::with_val(64, a) / Float::with_val(64, b)))
             }
             (UBasicValue::Float(a), UBasicValue::Float(b)) => {
                 if b == &Float::new(64) {
-                    return Err(UBasicError::DivisionByZero);
+                    return Err(UBasicError::runtime("Division by zero".to_string(), None));
                 }
                 Ok(UBasicValue::Float(a / b))
             }
             (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
                 if b == &Float::new(64) {
-                    return Err(UBasicError::DivisionByZero);
+                    return Err(UBasicError::runtime("Division by zero".to_string(), None));
                 }
                 Ok(UBasicValue::Float(Float::with_val(64, a) / b))
             }
             (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
                 if b == &Integer::ZERO {
-                    return Err(UBasicError::DivisionByZero);
+                    return Err(UBasicError::runtime("Division by zero".to_string(), None));
                 }
                 Ok(UBasicValue::Float(a / Float::with_val(64, b)))
             }
@@ -271,18 +558,24 @@ impl UBasicEngine {
     fn power(&self, left: &UBasicValue, right: &UBasicValue) -> UBasicResult<UBasicValue> {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
-                if let Ok(b_int) = b.to_i32() {
-                    if b_int >= 0 {
-                        Ok(UBasicValue::Integer(a.pow(b_int as u32)))
+                if let Some(b_small) = b.to_u32() {
+                    if b_small <= 1000 { // Reasonable limit
+                        Ok(UBasicValue::Integer(a.pow(b_small).into()))
                     } else {
-                        Ok(UBasicValue::Float(Float::with_val(64, a).pow(b_int)))
+                        Ok(UBasicValue::Float(Float::with_val(64, a).pow(b)))
                     }
                 } else {
-                    Err(UBasicError::overflow("integer power"))
+                    Ok(UBasicValue::Float(Float::with_val(64, a).pow(b)))
                 }
             }
             (UBasicValue::Float(a), UBasicValue::Float(b)) => {
                 Ok(UBasicValue::Float(a.pow(b)))
+            }
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                Ok(UBasicValue::Float(Float::with_val(64, a).pow(b)))
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                Ok(UBasicValue::Float(a.pow(Float::with_val(64, b))))
             }
             _ => Err(UBasicError::type_mismatch(
                 "numeric",
@@ -295,12 +588,18 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
                 if b == &Integer::ZERO {
-                    return Err(UBasicError::DivisionByZero);
+                    return Err(UBasicError::runtime("Modulo by zero".to_string(), None));
                 }
-                Ok(UBasicValue::Integer(a % b))
+                Ok(UBasicValue::Integer((a % b).into()))
+            }
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => {
+                if b == &Float::new(64) {
+                    return Err(UBasicError::runtime("Modulo by zero".to_string(), None));
+                }
+                Ok(UBasicValue::Float((a % b).into()))
             }
             _ => Err(UBasicError::type_mismatch(
-                "integer",
+                "numeric",
                 &format!("{:?} and {:?}", left.get_type(), right.get_type()),
             )),
         }
@@ -308,8 +607,8 @@ impl UBasicEngine {
 
     fn negate(&self, operand: &UBasicValue) -> UBasicResult<UBasicValue> {
         match operand {
-            UBasicValue::Integer(i) => Ok(UBasicValue::Integer(-i)),
-            UBasicValue::Float(f) => Ok(UBasicValue::Float(-f)),
+            UBasicValue::Integer(i) => Ok(UBasicValue::Integer((-i).into())),
+            UBasicValue::Float(f) => Ok(UBasicValue::Float((-f).into())),
             _ => Err(UBasicError::type_mismatch(
                 "numeric",
                 &format!("{:?}", operand.get_type()),
@@ -317,7 +616,6 @@ impl UBasicEngine {
         }
     }
 
-    // Comparison operations
     fn equal(&self, left: &UBasicValue, right: &UBasicValue) -> bool {
         left == right
     }
@@ -326,6 +624,12 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a < b,
             (UBasicValue::Float(a), UBasicValue::Float(b)) => a < b,
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                Float::with_val(64, a) < *b
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                a < &Float::with_val(64, b)
+            }
             _ => false,
         }
     }
@@ -334,6 +638,12 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a <= b,
             (UBasicValue::Float(a), UBasicValue::Float(b)) => a <= b,
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                Float::with_val(64, a) <= *b
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                a <= &Float::with_val(64, b)
+            }
             _ => false,
         }
     }
@@ -342,6 +652,12 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a > b,
             (UBasicValue::Float(a), UBasicValue::Float(b)) => a > b,
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                Float::with_val(64, a) > *b
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                a > &Float::with_val(64, b)
+            }
             _ => false,
         }
     }
@@ -350,11 +666,16 @@ impl UBasicEngine {
         match (left, right) {
             (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a >= b,
             (UBasicValue::Float(a), UBasicValue::Float(b)) => a >= b,
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                Float::with_val(64, a) >= *b
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                a >= &Float::with_val(64, b)
+            }
             _ => false,
         }
     }
 
-    // Logical operations
     fn and(&self, left: &UBasicValue, right: &UBasicValue) -> bool {
         self.is_truthy(left) && self.is_truthy(right)
     }
@@ -390,23 +711,22 @@ mod tests {
     #[test]
     fn test_arithmetic() {
         let mut engine = UBasicEngine::new();
-        let result = engine.run("LET x = 2 + 3 * 4").unwrap();
-        // Note: This will depend on operator precedence implementation
-        assert!(matches!(result, UBasicValue::Integer(_)));
+        let result = engine.run("LET y = 2 + 3 * 4").unwrap();
+        assert_eq!(result, UBasicValue::Integer(14.into()));
     }
 
     #[test]
     fn test_print() {
         let mut engine = UBasicEngine::new();
-        let result = engine.run("PRINT 42").unwrap();
+        let result = engine.run("PRINT \"Hello\"").unwrap();
         assert_eq!(result, UBasicValue::Null);
-        assert_eq!(engine.get_output(), &["42"]);
+        assert_eq!(engine.get_output(), &["Hello"]);
     }
 
     #[test]
     fn test_variable_not_found() {
         let mut engine = UBasicEngine::new();
-        let result = engine.run("x");
+        let result = engine.run("PRINT x");
         assert!(result.is_err());
     }
 } 

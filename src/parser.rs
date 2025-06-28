@@ -241,18 +241,15 @@ impl Parser {
                 // Numbers
                 '0'..='9' => {
                     let mut number = String::new();
-                    number.push(ch);
-                    
-                    while let Some(&next_ch) = chars.peek() {
-                        match next_ch {
-                            '0'..='9' | '.' | 'e' | 'E' | '+' | '-' => {
-                                number.push(chars.next().unwrap());
-                            }
-                            _ => break,
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_ascii_digit() || ch == '.' || ch == 'e' || ch == 'E' || ch == '+' || ch == '-' {
+                            number.push(ch);
+                            chars.next();
+                        } else {
+                            break;
                         }
                     }
-                    
-                    tokens.push(Token::Number(number));
+                    tokens.push(Token::Number(number.clone()));
                     column += number.len();
                 }
                 
@@ -285,50 +282,45 @@ impl Parser {
                 // Identifiers and keywords
                 'a'..='z' | 'A'..='Z' | '_' => {
                     let mut identifier = String::new();
-                    identifier.push(ch);
-                    
-                    while let Some(&next_ch) = chars.peek() {
-                        match next_ch {
-                            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
-                                identifier.push(chars.next().unwrap());
-                            }
-                            _ => break,
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            identifier.push(ch);
+                            chars.next();
+                        } else {
+                            break;
                         }
                     }
                     
-                    let token = match identifier.to_lowercase().as_str() {
-                        "let" => Token::Let,
-                        "print" => Token::Print,
-                        "if" => Token::If,
-                        "then" => Token::Then,
-                        "else" => Token::Else,
-                        "for" => Token::For,
-                        "to" => Token::To,
-                        "step" => Token::Step,
-                        "next" => Token::Next,
-                        "while" => Token::While,
-                        "wend" => Token::Wend,
-                        "do" => Token::Do,
-                        "loop" => Token::Loop,
-                        "until" => Token::Until,
-                        "goto" => Token::Goto,
-                        "gosub" => Token::Gosub,
-                        "return" => Token::Return,
-                        "end" => Token::End,
-                        "stop" => Token::Stop,
-                        "input" => Token::Input,
-                        "read" => Token::Read,
-                        "data" => Token::Data,
-                        "restore" => Token::Restore,
-                        "dim" => Token::Dim,
-                        "def" => Token::Def,
-                        "function" => Token::Function,
-                        "sub" => Token::Sub,
-                        "exit" => Token::Exit,
-                        "and" => Token::And,
-                        "or" => Token::Or,
-                        "not" => Token::Not,
-                        _ => Token::Identifier(identifier),
+                    let token = match identifier.to_uppercase().as_str() {
+                        "LET" => Token::Let,
+                        "PRINT" => Token::Print,
+                        "IF" => Token::If,
+                        "THEN" => Token::Then,
+                        "ELSE" => Token::Else,
+                        "FOR" => Token::For,
+                        "TO" => Token::To,
+                        "STEP" => Token::Step,
+                        "NEXT" => Token::Next,
+                        "WHILE" => Token::While,
+                        "WEND" => Token::Wend,
+                        "DO" => Token::Do,
+                        "LOOP" => Token::Loop,
+                        "UNTIL" => Token::Until,
+                        "GOTO" => Token::Goto,
+                        "GOSUB" => Token::Gosub,
+                        "RETURN" => Token::Return,
+                        "END" => Token::End,
+                        "STOP" => Token::Stop,
+                        "INPUT" => Token::Input,
+                        "READ" => Token::Read,
+                        "DATA" => Token::Data,
+                        "RESTORE" => Token::Restore,
+                        "DIM" => Token::Dim,
+                        "DEF" => Token::Def,
+                        "FUNCTION" => Token::Function,
+                        "SUB" => Token::Sub,
+                        "EXIT" => Token::Exit,
+                        _ => Token::Identifier(identifier.clone()),
                     };
                     
                     tokens.push(token);

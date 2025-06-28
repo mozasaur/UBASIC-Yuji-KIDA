@@ -3,165 +3,95 @@
 //! This module defines all error types that can occur during UBASIC execution,
 //! including parsing errors, runtime errors, mathematical errors, and system errors.
 
-use thiserror::Error;
 use std::fmt;
+use std::error::Error;
 
 /// Result type for UBASIC operations
 pub type UBasicResult<T> = Result<T, UBasicError>;
 
-/// Main error type for UBASIC
-#[derive(Error, Debug, Clone)]
+/// UBASIC error types
+#[derive(Debug)]
 pub enum UBasicError {
-    /// Syntax error during parsing
-    #[error("Syntax error: {message} at line {line}, column {column}")]
+    /// Syntax error in the source code
     Syntax {
         message: String,
-        line: usize,
-        column: usize,
+        line: Option<usize>,
+        column: Option<usize>,
     },
-
     /// Runtime error during execution
-    #[error("Runtime error: {message}")]
     Runtime {
         message: String,
         line: Option<usize>,
     },
-
-    /// Mathematical error (division by zero, overflow, etc.)
-    #[error("Math error: {message}")]
-    Math {
-        message: String,
-        operation: Option<String>,
-    },
-
-    /// Memory allocation or management error
-    #[error("Memory error: {message}")]
-    Memory {
-        message: String,
-        requested: Option<usize>,
-        available: Option<usize>,
-    },
-
-    /// Variable not found
-    #[error("Variable '{name}' not found")]
-    VariableNotFound {
-        name: String,
-    },
-
     /// Type mismatch error
-    #[error("Type mismatch: expected {expected}, got {actual}")]
     TypeMismatch {
         expected: String,
-        actual: String,
+        got: String,
+        line: Option<usize>,
     },
-
-    /// File I/O error
-    #[error("File error: {message}")]
-    File {
-        message: String,
-        path: Option<String>,
-        #[source]
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    /// Variable not found error
+    VariableNotFound {
+        name: String,
+        line: Option<usize>,
     },
-
-    /// Graphics error
-    #[error("Graphics error: {message}")]
-    Graphics {
-        message: String,
-        operation: Option<String>,
+    /// Function not found error
+    FunctionNotFound {
+        name: String,
+        line: Option<usize>,
     },
-
-    /// System error (OS-level errors)
-    #[error("System error: {message}")]
-    System {
-        message: String,
-        #[source]
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    /// Division by zero error
+    DivisionByZero {
+        line: Option<usize>,
     },
-
-    /// Stack overflow
-    #[error("Stack overflow: maximum depth {max_depth} exceeded")]
-    StackOverflow {
-        max_depth: usize,
-        current_depth: usize,
-    },
-
-    /// Recursion limit exceeded
-    #[error("Recursion limit exceeded: maximum {max_depth} levels")]
-    RecursionLimit {
-        max_depth: usize,
-        current_depth: usize,
-    },
-
-    /// Invalid function call
-    #[error("Invalid function call: {function_name}({args})")]
-    InvalidFunctionCall {
-        function_name: String,
-        args: String,
-        expected_args: usize,
-        actual_args: usize,
-    },
-
-    /// Array bounds error
-    #[error("Array bounds error: index {index} out of bounds [0, {max_index})")]
-    ArrayBounds {
-        index: isize,
-        max_index: usize,
-        array_name: String,
-    },
-
-    /// Division by zero
-    #[error("Division by zero")]
-    DivisionByZero,
-
     /// Overflow error
-    #[error("Overflow error: {operation}")]
     Overflow {
         operation: String,
+        line: Option<usize>,
     },
-
     /// Underflow error
-    #[error("Underflow error: {operation}")]
     Underflow {
         operation: String,
+        line: Option<usize>,
     },
-
-    /// Invalid number format
-    #[error("Invalid number format: '{input}'")]
-    InvalidNumber {
-        input: String,
-    },
-
-    /// Invalid string operation
-    #[error("Invalid string operation: {message}")]
-    InvalidString {
-        message: String,
-    },
-
-    /// Compilation error
-    #[error("Compilation error: {message}")]
-    Compilation {
+    /// Mathematical error
+    Math {
         message: String,
         line: Option<usize>,
     },
-
-    /// Linking error
-    #[error("Linking error: {message}")]
-    Linking {
+    /// File I/O error
+    Io {
         message: String,
+        line: Option<usize>,
     },
-
-    /// Internal error (should not occur in normal operation)
-    #[error("Internal error: {message}")]
-    Internal {
+    /// Memory allocation error
+    Memory {
         message: String,
+        line: Option<usize>,
+    },
+    /// Invalid argument error
+    InvalidArgument {
+        message: String,
+        line: Option<usize>,
+    },
+    /// Stack overflow error
+    StackOverflow {
+        line: Option<usize>,
+    },
+    /// Recursion limit exceeded
+    RecursionLimit {
+        line: Option<usize>,
+    },
+    /// Validation error
+    Validation {
+        message: String,
+        line: Option<usize>,
     },
 }
 
 impl UBasicError {
     /// Create a syntax error
-    pub fn syntax(message: impl Into<String>, line: usize, column: usize) -> Self {
-        Self::Syntax {
+    pub fn syntax(message: impl Into<String>, line: Option<usize>, column: Option<usize>) -> Self {
+        UBasicError::Syntax {
             message: message.into(),
             line,
             column,
@@ -170,206 +100,255 @@ impl UBasicError {
 
     /// Create a runtime error
     pub fn runtime(message: impl Into<String>, line: Option<usize>) -> Self {
-        Self::Runtime {
+        UBasicError::Runtime {
             message: message.into(),
             line,
         }
     }
 
-    /// Create a math error
-    pub fn math(message: impl Into<String>, operation: Option<String>) -> Self {
-        Self::Math {
-            message: message.into(),
-            operation,
+    /// Create a type mismatch error
+    pub fn type_mismatch(expected: impl Into<String>, got: impl Into<String>) -> Self {
+        UBasicError::TypeMismatch {
+            expected: expected.into(),
+            got: got.into(),
+            line: None,
         }
     }
 
     /// Create a variable not found error
-    pub fn variable_not_found(name: impl Into<String>) -> Self {
-        Self::VariableNotFound {
+    pub fn variable_not_found(name: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::VariableNotFound {
             name: name.into(),
+            line,
         }
     }
 
-    /// Create a type mismatch error
-    pub fn type_mismatch(expected: impl Into<String>, actual: impl Into<String>) -> Self {
-        Self::TypeMismatch {
-            expected: expected.into(),
-            actual: actual.into(),
+    /// Create a function not found error
+    pub fn function_not_found(name: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::FunctionNotFound {
+            name: name.into(),
+            line,
         }
     }
 
-    /// Create a file error
-    pub fn file(message: impl Into<String>, path: Option<String>) -> Self {
-        Self::File {
-            message: message.into(),
-            path,
-            source: None,
-        }
-    }
-
-    /// Create a graphics error
-    pub fn graphics(message: impl Into<String>, operation: Option<String>) -> Self {
-        Self::Graphics {
-            message: message.into(),
-            operation,
-        }
-    }
-
-    /// Create a system error
-    pub fn system(message: impl Into<String>) -> Self {
-        Self::System {
-            message: message.into(),
-            source: None,
-        }
-    }
-
-    /// Create a stack overflow error
-    pub fn stack_overflow(max_depth: usize, current_depth: usize) -> Self {
-        Self::StackOverflow {
-            max_depth,
-            current_depth,
-        }
-    }
-
-    /// Create a recursion limit error
-    pub fn recursion_limit(max_depth: usize, current_depth: usize) -> Self {
-        Self::RecursionLimit {
-            max_depth,
-            current_depth,
-        }
-    }
-
-    /// Create an invalid function call error
-    pub fn invalid_function_call(
-        function_name: impl Into<String>,
-        args: impl Into<String>,
-        expected_args: usize,
-        actual_args: usize,
-    ) -> Self {
-        Self::InvalidFunctionCall {
-            function_name: function_name.into(),
-            args: args.into(),
-            expected_args,
-            actual_args,
-        }
-    }
-
-    /// Create an array bounds error
-    pub fn array_bounds(index: isize, max_index: usize, array_name: impl Into<String>) -> Self {
-        Self::ArrayBounds {
-            index,
-            max_index,
-            array_name: array_name.into(),
-        }
+    /// Create a division by zero error
+    pub fn division_by_zero(line: Option<usize>) -> Self {
+        UBasicError::DivisionByZero { line }
     }
 
     /// Create an overflow error
     pub fn overflow(operation: impl Into<String>) -> Self {
-        Self::Overflow {
+        UBasicError::Overflow {
             operation: operation.into(),
+            line: None,
         }
     }
 
     /// Create an underflow error
     pub fn underflow(operation: impl Into<String>) -> Self {
-        Self::Underflow {
+        UBasicError::Underflow {
             operation: operation.into(),
+            line: None,
         }
     }
 
-    /// Create an invalid number error
-    pub fn invalid_number(input: impl Into<String>) -> Self {
-        Self::InvalidNumber {
-            input: input.into(),
-        }
-    }
-
-    /// Create an invalid string error
-    pub fn invalid_string(message: impl Into<String>) -> Self {
-        Self::InvalidString {
-            message: message.into(),
-        }
-    }
-
-    /// Create a compilation error
-    pub fn compilation(message: impl Into<String>, line: Option<usize>) -> Self {
-        Self::Compilation {
+    /// Create a mathematical error
+    pub fn math(message: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::Math {
             message: message.into(),
             line,
         }
     }
 
-    /// Create a linking error
-    pub fn linking(message: impl Into<String>) -> Self {
-        Self::Linking {
+    /// Create an I/O error
+    pub fn io(message: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::Io {
             message: message.into(),
+            line,
         }
     }
 
-    /// Create an internal error
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::Internal {
+    /// Create a memory error
+    pub fn memory(message: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::Memory {
             message: message.into(),
+            line,
         }
     }
 
-    /// Get the error message
-    pub fn message(&self) -> &str {
+    /// Create an invalid argument error
+    pub fn invalid_argument(message: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::InvalidArgument {
+            message: message.into(),
+            line,
+        }
+    }
+
+    /// Create a stack overflow error
+    pub fn stack_overflow(line: Option<usize>) -> Self {
+        UBasicError::StackOverflow { line }
+    }
+
+    /// Create a recursion limit error
+    pub fn recursion_limit(line: Option<usize>) -> Self {
+        UBasicError::RecursionLimit { line }
+    }
+
+    /// Create a validation error
+    pub fn validation(message: impl Into<String>, line: Option<usize>) -> Self {
+        UBasicError::Validation {
+            message: message.into(),
+            line,
+        }
+    }
+
+    /// Get the line number where the error occurred
+    pub fn line(&self) -> Option<usize> {
         match self {
-            Self::Syntax { message, .. } => message,
-            Self::Runtime { message, .. } => message,
-            Self::Math { message, .. } => message,
-            Self::Memory { message, .. } => message,
-            Self::VariableNotFound { name } => name,
-            Self::TypeMismatch { expected, actual } => {
-                // Return a combined message
-                expected
-            }
-            Self::File { message, .. } => message,
-            Self::Graphics { message, .. } => message,
-            Self::System { message, .. } => message,
-            Self::StackOverflow { .. } => "Stack overflow",
-            Self::RecursionLimit { .. } => "Recursion limit exceeded",
-            Self::InvalidFunctionCall { function_name, .. } => function_name,
-            Self::ArrayBounds { .. } => "Array bounds error",
-            Self::DivisionByZero => "Division by zero",
-            Self::Overflow { operation } => operation,
-            Self::Underflow { operation } => operation,
-            Self::InvalidNumber { input } => input,
-            Self::InvalidString { message } => message,
-            Self::Compilation { message, .. } => message,
-            Self::Linking { message } => message,
-            Self::Internal { message } => message,
+            UBasicError::Syntax { line, .. } => *line,
+            UBasicError::Runtime { line, .. } => *line,
+            UBasicError::TypeMismatch { line, .. } => *line,
+            UBasicError::VariableNotFound { line, .. } => *line,
+            UBasicError::FunctionNotFound { line, .. } => *line,
+            UBasicError::DivisionByZero { line } => *line,
+            UBasicError::Overflow { line, .. } => *line,
+            UBasicError::Underflow { line, .. } => *line,
+            UBasicError::Math { line, .. } => *line,
+            UBasicError::Io { line, .. } => *line,
+            UBasicError::Memory { line, .. } => *line,
+            UBasicError::InvalidArgument { line, .. } => *line,
+            UBasicError::StackOverflow { line } => *line,
+            UBasicError::RecursionLimit { line } => *line,
+            UBasicError::Validation { line, .. } => *line,
         }
     }
 
-    /// Check if this is a fatal error (cannot be recovered from)
-    pub fn is_fatal(&self) -> bool {
-        matches!(
-            self,
-            Self::Internal { .. } | Self::System { .. } | Self::Memory { .. }
-        )
-    }
-
-    /// Check if this is a recoverable error
-    pub fn is_recoverable(&self) -> bool {
-        !self.is_fatal()
+    /// Get the column number where the error occurred (only for syntax errors)
+    pub fn column(&self) -> Option<usize> {
+        match self {
+            UBasicError::Syntax { column, .. } => *column,
+            _ => None,
+        }
     }
 }
 
 impl fmt::Display for UBasicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TypeMismatch { expected, actual } => {
-                write!(f, "Type mismatch: expected {}, got {}", expected, actual)
+            UBasicError::Syntax { message, line, column } => {
+                if let (Some(line), Some(col)) = (line, column) {
+                    write!(f, "Syntax error at line {}, column {}: {}", line, col, message)
+                } else if let Some(line) = line {
+                    write!(f, "Syntax error at line {}: {}", line, message)
+                } else {
+                    write!(f, "Syntax error: {}", message)
+                }
             }
-            _ => write!(f, "{}", self.message()),
+            UBasicError::Runtime { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "Runtime error at line {}: {}", line, message)
+                } else {
+                    write!(f, "Runtime error: {}", message)
+                }
+            }
+            UBasicError::TypeMismatch { expected, got, line } => {
+                if let Some(line) = line {
+                    write!(f, "Type mismatch at line {}: expected {}, got {}", line, expected, got)
+                } else {
+                    write!(f, "Type mismatch: expected {}, got {}", expected, got)
+                }
+            }
+            UBasicError::VariableNotFound { name, line } => {
+                if let Some(line) = line {
+                    write!(f, "Variable '{}' not found at line {}", name, line)
+                } else {
+                    write!(f, "Variable '{}' not found", name)
+                }
+            }
+            UBasicError::FunctionNotFound { name, line } => {
+                if let Some(line) = line {
+                    write!(f, "Function '{}' not found at line {}", name, line)
+                } else {
+                    write!(f, "Function '{}' not found", name)
+                }
+            }
+            UBasicError::DivisionByZero { line } => {
+                if let Some(line) = line {
+                    write!(f, "Division by zero at line {}", line)
+                } else {
+                    write!(f, "Division by zero")
+                }
+            }
+            UBasicError::Overflow { operation, line } => {
+                if let Some(line) = line {
+                    write!(f, "Overflow in {} at line {}", operation, line)
+                } else {
+                    write!(f, "Overflow in {}", operation)
+                }
+            }
+            UBasicError::Underflow { operation, line } => {
+                if let Some(line) = line {
+                    write!(f, "Underflow in {} at line {}", operation, line)
+                } else {
+                    write!(f, "Underflow in {}", operation)
+                }
+            }
+            UBasicError::Math { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "Mathematical error at line {}: {}", line, message)
+                } else {
+                    write!(f, "Mathematical error: {}", message)
+                }
+            }
+            UBasicError::Io { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "I/O error at line {}: {}", line, message)
+                } else {
+                    write!(f, "I/O error: {}", message)
+                }
+            }
+            UBasicError::Memory { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "Memory error at line {}: {}", line, message)
+                } else {
+                    write!(f, "Memory error: {}", message)
+                }
+            }
+            UBasicError::InvalidArgument { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "Invalid argument at line {}: {}", line, message)
+                } else {
+                    write!(f, "Invalid argument: {}", message)
+                }
+            }
+            UBasicError::StackOverflow { line } => {
+                if let Some(line) = line {
+                    write!(f, "Stack overflow at line {}", line)
+                } else {
+                    write!(f, "Stack overflow")
+                }
+            }
+            UBasicError::RecursionLimit { line } => {
+                if let Some(line) = line {
+                    write!(f, "Recursion limit exceeded at line {}", line)
+                } else {
+                    write!(f, "Recursion limit exceeded")
+                }
+            }
+            UBasicError::Validation { message, line } => {
+                if let Some(line) = line {
+                    write!(f, "Validation error at line {}: {}", line, message)
+                } else {
+                    write!(f, "Validation error: {}", message)
+                }
+            }
         }
     }
 }
 
-/// Error context for better error reporting
+impl Error for UBasicError {}
+
+/// Error context for providing additional information about errors
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
     pub line: Option<usize>,
@@ -420,38 +399,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_creation() {
-        let syntax_error = UBasicError::syntax("Unexpected token", 10, 5);
-        assert!(matches!(syntax_error, UBasicError::Syntax { .. }));
-
-        let runtime_error = UBasicError::runtime("Variable not found", Some(15));
-        assert!(matches!(runtime_error, UBasicError::Runtime { .. }));
-
-        let math_error = UBasicError::math("Division by zero", Some("DIV".to_string()));
-        assert!(matches!(math_error, UBasicError::Math { .. }));
+    fn test_syntax_error() {
+        let error = UBasicError::syntax("Unexpected token", Some(10), Some(5));
+        assert_eq!(error.line(), Some(10));
+        assert_eq!(error.column(), Some(5));
+        assert!(error.to_string().contains("Syntax error"));
     }
 
     #[test]
-    fn test_error_properties() {
-        let internal_error = UBasicError::internal("Critical failure");
-        assert!(internal_error.is_fatal());
-        assert!(!internal_error.is_recoverable());
-
-        let syntax_error = UBasicError::syntax("Missing semicolon", 1, 1);
-        assert!(!syntax_error.is_fatal());
-        assert!(syntax_error.is_recoverable());
+    fn test_runtime_error() {
+        let error = UBasicError::runtime("Variable not initialized", Some(15));
+        assert_eq!(error.line(), Some(15));
+        assert!(error.to_string().contains("Runtime error"));
     }
 
     #[test]
-    fn test_error_context() {
-        let context = ErrorContext::new()
-            .with_line(10)
-            .with_column(5)
-            .with_source_line("LET x = 2 + 3".to_string())
-            .add_stack_frame("main()".to_string());
-
-        assert_eq!(context.line, Some(10));
-        assert_eq!(context.column, Some(5));
-        assert_eq!(context.stack_trace.len(), 1);
+    fn test_type_mismatch_error() {
+        let error = UBasicError::type_mismatch("Integer", "String");
+        assert!(error.to_string().contains("Type mismatch"));
+        assert!(error.to_string().contains("Integer"));
+        assert!(error.to_string().contains("String"));
     }
+
+    #[test]
+    fn test_division_by_zero_error() {
+        let error = UBasicError::division_by_zero(Some(20));
+        assert_eq!(error.line(), Some(20));
+        assert!(error.to_string().contains("Division by zero"));
+    }
+} 
 } 

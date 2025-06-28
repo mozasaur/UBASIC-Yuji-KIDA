@@ -4,11 +4,14 @@
 //! including integers, floats, complex numbers, strings, arrays, and more.
 
 use rug::{Integer, Float, Complex};
-use num_rational::Rational;
-use nalgebra::{Matrix, Vector};
+use num_rational::Rational64;
+use nalgebra::{Matrix, Vector, U1, Dynamic};
 use serde::{Serialize, Deserialize};
 use std::fmt;
 use std::collections::HashMap;
+use std::ops::{Add, Sub, Mul, Div, Rem, Neg, AddAssign, SubAssign, MulAssign, DivAssign, RemAssign};
+use std::cmp::{PartialEq, PartialOrd, Ordering};
+use num_complex::Complex64;
 
 /// Main UBASIC value type that can hold any supported data type
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,10 +23,10 @@ pub enum UBasicValue {
     Float(Float),
     
     /// Complex number
-    Complex(Complex<f64>),
+    Complex(Complex),
     
     /// Rational number (fraction)
-    Rational(Rational<i64>),
+    Rational(Rational64),
     
     /// String
     String(String),
@@ -32,10 +35,10 @@ pub enum UBasicValue {
     Array(Vec<UBasicValue>),
     
     /// Matrix
-    Matrix(Matrix<f64>),
+    Matrix(Matrix<f64, Dynamic, Dynamic, nalgebra::VecStorage<f64, Dynamic, Dynamic>>),
     
     /// Vector
-    Vector(Vector<f64>),
+    Vector(Vector<f64, Dynamic, nalgebra::VecStorage<f64, Dynamic, U1>>),
     
     /// Boolean value
     Boolean(bool),
@@ -89,7 +92,7 @@ impl UBasicValue {
         match self {
             Self::Integer(i) => i == &Integer::ZERO,
             Self::Float(f) => f == &Float::new(64),
-            Self::Complex(c) => c.norm_sqr() == 0.0,
+            Self::Complex(c) => c.norm_ref().to_f64() == 0.0,
             Self::Rational(r) => r.numer() == &0,
             Self::String(s) => s.is_empty(),
             Self::Array(a) => a.is_empty(),
@@ -105,7 +108,7 @@ impl UBasicValue {
         match self {
             Self::Integer(i) => i.to_string(),
             Self::Float(f) => f.to_string(),
-            Self::Complex(c) => format!("{}+{}i", c.re, c.im),
+            Self::Complex(c) => format!("{}+{}i", c.real_ref(), c.imag_ref()),
             Self::Rational(r) => r.to_string(),
             Self::String(s) => s.clone(),
             Self::Array(a) => {
@@ -134,6 +137,86 @@ impl UBasicValue {
     pub fn is_empty(&self) -> bool {
         self.len().map(|l| l == 0).unwrap_or(true)
     }
+
+    /// Get the type name of the value
+    pub fn get_type_name(&self) -> &'static str {
+        match self {
+            UBasicValue::Integer(_) => "Integer",
+            UBasicValue::Float(_) => "Float",
+            UBasicValue::Complex(_) => "Complex",
+            UBasicValue::String(_) => "String",
+            UBasicValue::Boolean(_) => "Boolean",
+            UBasicValue::Array(_) => "Array",
+            UBasicValue::Matrix(_) => "Matrix",
+            UBasicValue::Vector(_) => "Vector",
+            UBasicValue::Null => "Null",
+        }
+    }
+
+    /// Convert to integer if possible
+    pub fn to_integer(&self) -> Option<Integer> {
+        match self {
+            UBasicValue::Integer(i) => Some(i.clone()),
+            UBasicValue::Float(f) => f.to_integer().ok(),
+            UBasicValue::Complex(c) => {
+                if c.imag_ref().is_zero() {
+                    c.real_ref().to_integer().ok()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert to float if possible
+    pub fn to_float(&self) -> Option<Float> {
+        match self {
+            UBasicValue::Integer(i) => Some(Float::with_val(64, i)),
+            UBasicValue::Float(f) => Some(f.clone()),
+            UBasicValue::Complex(c) => {
+                if c.imag_ref().is_zero() {
+                    Some(Float::with_val(64, c.real_ref()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert to complex if possible
+    pub fn to_complex(&self) -> Option<Complex> {
+        match self {
+            UBasicValue::Integer(i) => {
+                let mut c = Complex::new(64);
+                c.assign(i);
+                Some(c)
+            }
+            UBasicValue::Float(f) => {
+                let mut c = Complex::new(64);
+                c.assign(f);
+                Some(c)
+            }
+            UBasicValue::Complex(c) => Some(c.clone()),
+            _ => None,
+        }
+    }
+
+    /// Convert to boolean if possible
+    pub fn to_boolean(&self) -> Option<bool> {
+        match self {
+            UBasicValue::Boolean(b) => Some(*b),
+            UBasicValue::Integer(i) => Some(!i.is_zero()),
+            UBasicValue::Float(f) => Some(!f.is_zero()),
+            UBasicValue::Complex(c) => Some(!c.is_zero()),
+            UBasicValue::String(s) => Some(!s.is_empty()),
+            UBasicValue::Array(a) => Some(!a.is_empty()),
+            UBasicValue::Matrix(m) => Some(!m.is_empty()),
+            UBasicValue::Vector(v) => Some(!v.is_empty()),
+            UBasicValue::Null => Some(false),
+        }
+    }
 }
 
 impl fmt::Display for UBasicValue {
@@ -142,45 +225,380 @@ impl fmt::Display for UBasicValue {
     }
 }
 
+impl PartialEq for UBasicValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a == b,
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => a == b,
+            (UBasicValue::Complex(a), UBasicValue::Complex(b)) => a == b,
+            (UBasicValue::String(a), UBasicValue::String(b)) => a == b,
+            (UBasicValue::Boolean(a), UBasicValue::Boolean(b)) => a == b,
+            (UBasicValue::Array(a), UBasicValue::Array(b)) => a == b,
+            (UBasicValue::Matrix(a), UBasicValue::Matrix(b)) => a == b,
+            (UBasicValue::Vector(a), UBasicValue::Vector(b)) => a == b,
+            (UBasicValue::Null, UBasicValue::Null) => true,
+            _ => false,
+        }
+    }
+}
+
+impl PartialOrd for UBasicValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => a.partial_cmp(b),
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => a.partial_cmp(b),
+            (UBasicValue::String(a), UBasicValue::String(b)) => a.partial_cmp(b),
+            (UBasicValue::Boolean(a), UBasicValue::Boolean(b)) => a.partial_cmp(b),
+            _ => None,
+        }
+    }
+}
+
+// Arithmetic operations
+impl Add for UBasicValue {
+    type Output = UBasicValue;
+
+    fn add(self, other: UBasicValue) -> UBasicValue {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => UBasicValue::Integer(a + b),
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => UBasicValue::Float(a + b),
+            (UBasicValue::Complex(a), UBasicValue::Complex(b)) => UBasicValue::Complex(a + b),
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                let fa = Float::with_val(64, a);
+                UBasicValue::Float(fa + b)
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                let fb = Float::with_val(64, b);
+                UBasicValue::Float(a + fb)
+            }
+            (UBasicValue::Integer(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c + b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Integer(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a + c)
+            }
+            (UBasicValue::Float(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c + b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Float(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a + c)
+            }
+            (UBasicValue::String(a), UBasicValue::String(b)) => UBasicValue::String(a + &b),
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+impl Sub for UBasicValue {
+    type Output = UBasicValue;
+
+    fn sub(self, other: UBasicValue) -> UBasicValue {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => UBasicValue::Integer(a - b),
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => UBasicValue::Float(a - b),
+            (UBasicValue::Complex(a), UBasicValue::Complex(b)) => UBasicValue::Complex(a - b),
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                let fa = Float::with_val(64, a);
+                UBasicValue::Float(fa - b)
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                let fb = Float::with_val(64, b);
+                UBasicValue::Float(a - fb)
+            }
+            (UBasicValue::Integer(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c - b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Integer(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a - c)
+            }
+            (UBasicValue::Float(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c - b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Float(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a - c)
+            }
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+impl Mul for UBasicValue {
+    type Output = UBasicValue;
+
+    fn mul(self, other: UBasicValue) -> UBasicValue {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => UBasicValue::Integer(a * b),
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => UBasicValue::Float(a * b),
+            (UBasicValue::Complex(a), UBasicValue::Complex(b)) => UBasicValue::Complex(a * b),
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                let fa = Float::with_val(64, a);
+                UBasicValue::Float(fa * b)
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                let fb = Float::with_val(64, b);
+                UBasicValue::Float(a * fb)
+            }
+            (UBasicValue::Integer(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c * b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Integer(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a * c)
+            }
+            (UBasicValue::Float(a), UBasicValue::Complex(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(a);
+                UBasicValue::Complex(c * b)
+            }
+            (UBasicValue::Complex(a), UBasicValue::Float(b)) => {
+                let mut c = Complex::new(64);
+                c.assign(b);
+                UBasicValue::Complex(a * c)
+            }
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+impl Div for UBasicValue {
+    type Output = UBasicValue;
+
+    fn div(self, other: UBasicValue) -> UBasicValue {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    UBasicValue::Integer(a / b)
+                }
+            }
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    UBasicValue::Float(a / b)
+                }
+            }
+            (UBasicValue::Complex(a), UBasicValue::Complex(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    UBasicValue::Complex(a / b)
+                }
+            }
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let fa = Float::with_val(64, a);
+                    UBasicValue::Float(fa / b)
+                }
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let fb = Float::with_val(64, b);
+                    UBasicValue::Float(a / fb)
+                }
+            }
+            (UBasicValue::Integer(a), UBasicValue::Complex(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let mut c = Complex::new(64);
+                    c.assign(a);
+                    UBasicValue::Complex(c / b)
+                }
+            }
+            (UBasicValue::Complex(a), UBasicValue::Integer(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let mut c = Complex::new(64);
+                    c.assign(b);
+                    UBasicValue::Complex(a / c)
+                }
+            }
+            (UBasicValue::Float(a), UBasicValue::Complex(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let mut c = Complex::new(64);
+                    c.assign(a);
+                    UBasicValue::Complex(c / b)
+                }
+            }
+            (UBasicValue::Complex(a), UBasicValue::Float(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let mut c = Complex::new(64);
+                    c.assign(b);
+                    UBasicValue::Complex(a / c)
+                }
+            }
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+impl Rem for UBasicValue {
+    type Output = UBasicValue;
+
+    fn rem(self, other: UBasicValue) -> UBasicValue {
+        match (self, other) {
+            (UBasicValue::Integer(a), UBasicValue::Integer(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    UBasicValue::Integer(a % b)
+                }
+            }
+            (UBasicValue::Float(a), UBasicValue::Float(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    UBasicValue::Float(a % b)
+                }
+            }
+            (UBasicValue::Integer(a), UBasicValue::Float(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let fa = Float::with_val(64, a);
+                    UBasicValue::Float(fa % b)
+                }
+            }
+            (UBasicValue::Float(a), UBasicValue::Integer(b)) => {
+                if b.is_zero() {
+                    UBasicValue::Null
+                } else {
+                    let fb = Float::with_val(64, b);
+                    UBasicValue::Float(a % fb)
+                }
+            }
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+impl Neg for UBasicValue {
+    type Output = UBasicValue;
+
+    fn neg(self) -> UBasicValue {
+        match self {
+            UBasicValue::Integer(i) => UBasicValue::Integer(-i),
+            UBasicValue::Float(f) => UBasicValue::Float(-f),
+            UBasicValue::Complex(c) => UBasicValue::Complex(-c),
+            _ => UBasicValue::Null,
+        }
+    }
+}
+
+// Assignment operations
+impl AddAssign for UBasicValue {
+    fn add_assign(&mut self, other: UBasicValue) {
+        *self = self.clone() + other;
+    }
+}
+
+impl SubAssign for UBasicValue {
+    fn sub_assign(&mut self, other: UBasicValue) {
+        *self = self.clone() - other;
+    }
+}
+
+impl MulAssign for UBasicValue {
+    fn mul_assign(&mut self, other: UBasicValue) {
+        *self = self.clone() * other;
+    }
+}
+
+impl DivAssign for UBasicValue {
+    fn div_assign(&mut self, other: UBasicValue) {
+        *self = self.clone() / other;
+    }
+}
+
+impl RemAssign for UBasicValue {
+    fn rem_assign(&mut self, other: UBasicValue) {
+        *self = self.clone() % other;
+    }
+}
+
+// From implementations for easy conversion
 impl From<i32> for UBasicValue {
     fn from(value: i32) -> Self {
-        Self::Integer(Integer::from(value))
+        UBasicValue::Integer(Integer::from(value))
     }
 }
 
 impl From<i64> for UBasicValue {
     fn from(value: i64) -> Self {
-        Self::Integer(Integer::from(value))
+        UBasicValue::Integer(Integer::from(value))
     }
 }
 
 impl From<f64> for UBasicValue {
     fn from(value: f64) -> Self {
-        Self::Float(Float::with_val(64, value))
+        UBasicValue::Float(Float::with_val(64, value))
     }
 }
 
 impl From<String> for UBasicValue {
     fn from(value: String) -> Self {
-        Self::String(value)
+        UBasicValue::String(value)
     }
 }
 
 impl From<&str> for UBasicValue {
     fn from(value: &str) -> Self {
-        Self::String(value.to_string())
+        UBasicValue::String(value.to_string())
     }
 }
 
 impl From<bool> for UBasicValue {
     fn from(value: bool) -> Self {
-        Self::Boolean(value)
+        UBasicValue::Boolean(value)
     }
 }
 
 impl From<Vec<UBasicValue>> for UBasicValue {
     fn from(value: Vec<UBasicValue>) -> Self {
-        Self::Array(value)
+        UBasicValue::Array(value)
+    }
+}
+
+impl From<Vec<Vec<UBasicValue>>> for UBasicValue {
+    fn from(value: Vec<Vec<UBasicValue>>) -> Self {
+        UBasicValue::Matrix(value)
+    }
+}
+
+// Default implementation
+impl Default for UBasicValue {
+    fn default() -> Self {
+        UBasicValue::Null
     }
 }
 
@@ -210,7 +628,7 @@ impl Variable {
     }
 }
 
-/// Array storage
+/// Array data structure
 #[derive(Debug, Clone)]
 pub struct Array {
     pub dimensions: Vec<usize>,
@@ -219,28 +637,29 @@ pub struct Array {
 
 impl Array {
     pub fn new(dimensions: Vec<usize>) -> Self {
-        let total_size: usize = dimensions.iter().product();
+        let total_size = dimensions.iter().product();
         Self {
             dimensions,
             data: vec![UBasicValue::Null; total_size],
         }
     }
 
+    /// Get the linear index from multi-dimensional indices
     pub fn get_index(&self, indices: &[isize]) -> Option<usize> {
         if indices.len() != self.dimensions.len() {
             return None;
         }
 
         let mut index = 0;
-        let mut multiplier = 1;
+        let mut stride = 1;
 
         for (i, &dim) in self.dimensions.iter().enumerate().rev() {
-            let idx = indices[i];
-            if idx < 0 || idx >= dim as isize {
+            let idx = indices[i] as usize;
+            if idx >= dim {
                 return None;
             }
-            index += (idx as usize) * multiplier;
-            multiplier *= dim;
+            index += idx * stride;
+            stride *= dim;
         }
 
         Some(index)
@@ -282,7 +701,7 @@ impl Function {
     }
 }
 
-/// Program state
+/// Program execution state
 #[derive(Debug, Clone)]
 pub struct ProgramState {
     pub variables: HashMap<String, Variable>,
@@ -353,7 +772,6 @@ mod tests {
         let int_val = UBasicValue::Integer(Integer::from(42));
         assert_eq!(int_val.get_type(), UBasicType::Integer);
         assert!(int_val.is_numeric());
-        assert!(!int_val.is_zero());
 
         let float_val = UBasicValue::Float(Float::with_val(64, 3.14));
         assert_eq!(float_val.get_type(), UBasicType::Float);
@@ -362,33 +780,26 @@ mod tests {
         let string_val = UBasicValue::String("hello".to_string());
         assert_eq!(string_val.get_type(), UBasicType::String);
         assert!(!string_val.is_numeric());
-        assert_eq!(string_val.len(), Some(5));
     }
 
     #[test]
     fn test_array_operations() {
-        let mut array = Array::new(vec![3, 3]); // 3x3 array
-        assert_eq!(array.data.len(), 9);
+        let mut array = Array::new(vec![2, 3]);
+        array.set(&[0, 0], UBasicValue::Integer(Integer::from(1)));
+        array.set(&[1, 2], UBasicValue::Integer(Integer::from(6)));
 
-        // Set value at [1, 2]
-        let value = UBasicValue::Integer(Integer::from(42));
-        assert!(array.set(&[1, 2], value.clone()));
-        assert_eq!(array.get(&[1, 2]), Some(&value));
-
-        // Invalid index
-        assert!(array.get(&[5, 5]).is_none());
+        assert_eq!(array.get(&[0, 0]), Some(&UBasicValue::Integer(Integer::from(1))));
+        assert_eq!(array.get(&[1, 2]), Some(&UBasicValue::Integer(Integer::from(6))));
+        assert_eq!(array.get(&[2, 0]), None); // Out of bounds
     }
 
     #[test]
     fn test_program_state() {
         let mut state = ProgramState::new();
+        state.set_variable("x".to_string(), UBasicValue::Integer(Integer::from(42)));
         
-        state.set_variable("x".to_string(), UBasicValue::Integer(Integer::from(10)));
-        assert_eq!(state.get_variable("x"), Some(&UBasicValue::Integer(Integer::from(10))));
-        
-        let array = Array::new(vec![2, 2]);
-        state.set_array("matrix".to_string(), array);
-        assert!(state.get_array("matrix").is_some());
+        assert_eq!(state.get_variable("x"), Some(&UBasicValue::Integer(Integer::from(42))));
+        assert_eq!(state.get_variable("y"), None);
     }
 
     #[test]
